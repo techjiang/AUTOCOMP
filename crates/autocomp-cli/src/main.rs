@@ -1,4 +1,6 @@
 use autocomp_core::{AutoCompiler, CompileOptions, Profile, ProfileFormat, Workload};
+use std::io::Write;
+use std::process::{Command, Stdio};
 use std::fs;
 use std::path::PathBuf;
 use std::time::Duration;
@@ -13,7 +15,8 @@ fn main() -> Result<(), String> {
         "report" => report(&args[2..]),
         "bench" => bench(&args[2..]),
         "help" | "--help" | "-h" => {
-            println!("autocomp <command> [options]\n\nCommands:\n  cc               C compiler\n  c++              C++ compiler\n  profile          collect profile\n  optimize         PGO build\n  report           optimization report (HTML)\n  bench            quick benchmark\n\nOptions:\n  -O3              enable optimization level 3\n  --instrument     emit instrumented object\n  --pgo=<file>     compile with profile\n  --output=<file>  output path for profile/report\n  --workload=<s>   workload label for auto PGO");
+            println!("autocomp <command> [options]\n\nCommands:\n  cc               C compiler\n  c++              C++ compiler\n  profile          collect profile\n  optimize         PGO build\n  report           optimization report (HTML)\n  bench            quick benchmark\n\nOptions:\n  -O3              enable optimization level 3\n  --instrument     emit instrumented object\n  --pgo=<file>     compile with profile\n  --output=<file>  output path for profile/report\n  --workload=<s>   workload label for auto PGO
+  --no-run         skip running the generated demo binary");
             Ok(())
         }
         other => Err(format!("unknown command: {other}")),
@@ -71,8 +74,17 @@ fn auto_pgo(args: &[String]) -> Result<(), String> {
         timeout: Duration::from_secs(60),
     };
     let mut compiler = AutoCompiler::default();
-    let result = compiler.compile_auto_pgo(&source, &workload, &CompileOptions::default())?;
+    let options = CompileOptions {
+        optimization_level: args.iter().position(|a| a == "-O3").map(|_| 3).unwrap_or(0),
+        ..CompileOptions::default()
+    };
+    let result = compiler.compile_auto_pgo(&source, &workload, &options)?;
     print_result("auto-pgo", &result);
+    if !args.iter().any(|a| a == "--no-run") {
+        if let Some(program) = result.products.iter().find(|p| p.extension().and_then(|e| e.to_str()) == Some("bin")) {
+            run_workload(program, &workload)?;
+        }
+    }
     Ok(())
 }
 
@@ -111,6 +123,21 @@ fn report(args: &[String]) -> Result<(), String> {
     let html = autocomp_core::report::render_html(&format!("AUTOCOMP Report · {}", source.display()), &result, profile.as_ref());
     fs::write(&output, html).map_err(|e| e.to_string())?;
     println!("report written to {}", output.display());
+    Ok(())
+}
+
+fn run_workload(program: &std::path::Path, workload: &Workload) -> Result<(), String> {
+    let mut command = Command::new(program);
+    command.args(&workload.argv[1..]);
+    if workload.stdin.is_some() {
+        command.stdin(Stdio::null());
+    }
+    let output = command.output().map_err(|e| format!("cannot run {}: {e}", program.display()))?;
+    std::io::stdout().write_all(&output.stdout).map_err(|e| e.to_string())?;
+    std::io::stderr().write_all(&output.stderr).map_err(|e| e.to_string())?;
+    if !output.status.success() {
+        return Err(format!("workload exited with {}", output.status));
+    }
     Ok(())
 }
 

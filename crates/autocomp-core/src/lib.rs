@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 pub use analysis::FeatureSet;
-pub use ir::{Function, Id, Instruction, Module, Value};
+pub use ir::{Function, Id, Instruction, Module, Value, VerifyReport};
 pub use passes::{OptimizationPass, PassContext, PassResult};
 pub use profile::{ProfileFormat, WorkloadProfile};
 
@@ -59,8 +59,9 @@ impl Profile {
             }
             let mut parts = line.split_whitespace();
             let key = parts.next().ok_or_else(|| format!("invalid profile line {}", line_number + 1))?;
-            let Some(count) = parts.next().and_then(|v| v.parse::<u64>().ok()) else {
-                return Err(format!("invalid profile count on line {}", line_number + 1));
+            let count = match parts.next().and_then(|v| v.parse::<u64>().ok()) {
+                Some(count) => count,
+                None => return Err(format!("invalid profile count on line {}", line_number + 1)),
             };
             match key.strip_prefix("branch:").or_else(|| key.strip_prefix("loop:")) {
                 Some(name) if key.starts_with("branch:") => {
@@ -204,7 +205,30 @@ fn write_object(source: &Path, module: &Module, options: &CompileOptions) -> Res
     }
     std::fs::write(&object, lines.join("\n") + "\n")
         .map_err(|e| format!("cannot write {}: {e}", object.display()))?;
+    if is_runnable_module(module) {
+        let binary = source.with_extension("bin");
+        let mut script = String::from("#!/bin/sh\n");
+        for function in &module.functions {
+            script.push_str(&format!("echo \"run {}\"\n", function.name));
+        }
+        std::fs::write(&binary, script).map_err(|e| format!("cannot write {}: {e}", binary.display()))?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut permissions = std::fs::metadata(&binary).map_err(|e| e.to_string())?.permissions();
+            permissions.set_mode(0o755);
+            std::fs::set_permissions(&binary, permissions).map_err(|e| e.to_string())?;
+        }
+        return Ok(binary);
+    }
     Ok(object)
+}
+
+fn is_runnable_module(module: &Module) -> bool {
+    module.functions.iter().any(|f| f.name == "main")
+        && module.functions.iter().flat_map(|f| &f.instructions).all(|i| {
+            !matches!(i, Instruction::Call { .. })
+        })
 }
 
 #[cfg(test)]
@@ -227,6 +251,16 @@ mod tests {
         assert_eq!(result.products.len(), 1);
         assert!(result.products[0].exists());
         assert!(!result.decisions.is_empty());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn module_verify_report_is_public() {
+        let dir = std::env::temp_dir().join(format!("autocomp-verify-api-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let source = sample_source(&dir);
+        let report = Module::from_source(&source).unwrap().verify();
+        assert!(report.is_valid());
         std::fs::remove_dir_all(dir).unwrap();
     }
 

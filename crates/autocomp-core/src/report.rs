@@ -13,6 +13,36 @@ pub fn render_html(title: &str, result: &CompileResult, profile: Option<&Profile
         let count = profile.and_then(|p| p.function_counts.get(name)).copied().unwrap_or(0);
         format!("<tr><td>{}</td><td>{}</td></tr>", escape(name), count)
     }).collect::<Vec<_>>().join("");
+    let branch_rows = profile
+        .map(|p| {
+            let mut branches: Vec<_> = p.branch_counts.iter().collect();
+            branches.sort_by(|a, b| (b.1.0 + b.1.1).cmp(&(a.1.0 + a.1.1)).then(a.0.cmp(b.0)));
+            branches.into_iter().take(8).map(|(name, (false_count, true_count))| {
+                let total = false_count + true_count;
+                let percent = if total == 0 { 0.0 } else { *true_count as f64 * 100.0 / total as f64 };
+                format!("<tr><td>{}</td><td>{}</td><td>{}</td><td>{:.1}%</td></tr>", escape(name), false_count, true_count, percent)
+            }).collect::<Vec<_>>().join("")
+        })
+        .unwrap_or_default();
+    let branch_section = if branch_rows.is_empty() {
+        String::new()
+    } else {
+        format!("<h2>分支 Profile</h2><table><thead><tr><th>分支</th><th>false</th><th>true</th><th>true 比例</th></tr></thead><tbody>{branch_rows}</tbody></table>")
+    };
+    let loop_rows = profile
+        .map(|p| {
+            let mut loops: Vec<_> = p.loop_counts.iter().collect();
+            loops.sort_by(|a, b| b.1.cmp(a.1).then(a.0.cmp(b.0)));
+            loops.into_iter().take(8).map(|(name, count)| {
+                format!("<tr><td>{}</td><td>{}</td></tr>", escape(name), count)
+            }).collect::<Vec<_>>().join("")
+        })
+        .unwrap_or_default();
+    let loop_section = if loop_rows.is_empty() {
+        String::new()
+    } else {
+        format!("<h2>循环 Profile</h2><table><thead><tr><th>循环</th><th>采样数</th></tr></thead><tbody>{loop_rows}</tbody></table>")
+    };
     let hot_section = if hot_rows.is_empty() {
         String::new()
     } else {
@@ -20,7 +50,7 @@ pub fn render_html(title: &str, result: &CompileResult, profile: Option<&Profile
     };
 
     format!(
-        "<!doctype html>\n<html lang=\"zh-CN\">\n<head>\n<meta charset=\"utf-8\">\n<title>{}</title>\n<style>\nbody{{font-family:system-ui,sans-serif;margin:2rem;color:#1f2937}}\nh1{{color:#2563eb}}\ncode{{background:#f3f4f6;padding:.15rem .35rem;border-radius:4px}}\nli{{margin:.35rem 0}}\ntable{{border-collapse:collapse;margin-top:.5rem}}td,th{{border:1px solid #d1d5db;padding:.4rem .7rem;text-align:left}}\n</style>\n</head>\n<body>\n<h1>{}</h1>\n<p>函数 {} · 指令 {} · 调用 {} · 常量 {}</p>\n<h2>产物</h2><ul>{}</ul>\n<h2>优化决策</h2><ol>{}</ol>\n{}\n</body>\n</html>\n",
+        "<!doctype html>\n<html lang=\"zh-CN\">\n<head>\n<meta charset=\"utf-8\">\n<title>{}</title>\n<style>\nbody{{font-family:system-ui,sans-serif;margin:2rem;color:#1f2937}}\nh1{{color:#2563eb}}\ncode{{background:#f3f4f6;padding:.15rem .35rem;border-radius:4px}}\nli{{margin:.35rem 0}}\ntable{{border-collapse:collapse;margin-top:.5rem}}td,th{{border:1px solid #d1d5db;padding:.4rem .7rem;text-align:left}}\n.panel{{background:#f8fafc;border-left:4px solid #2563eb;padding:.8rem 1rem;margin:1rem 0}}\n</style>\n</head>\n<body>\n<h1>{}</h1>\n<div class=\"panel\">函数 {} · 指令 {} · 调用 {} · 常量 {}</div>\n<h2>产物</h2><ul>{}</ul>\n<h2>优化决策</h2><ol>{}</ol>\n{}\n{}\n{}\n</body>\n</html>\n",
         escape(title),
         escape(title),
         result.features.function_count,
@@ -30,6 +60,8 @@ pub fn render_html(title: &str, result: &CompileResult, profile: Option<&Profile
         products,
         decisions,
         hot_section,
+        branch_section,
+        loop_section,
     )
 }
 
@@ -49,5 +81,22 @@ mod tests {
         assert!(html.contains("AUTOCOMP &amp; Report"));
         assert!(html.contains("&lt;object&gt;"));
         assert!(html.contains("demo.o"));
+    }
+
+    #[test]
+    fn html_report_includes_profile_sections() {
+        let result = CompileResult {
+            products: vec![PathBuf::from("demo.opt.o")],
+            features: crate::FeatureSet::default(),
+            decisions: vec!["pgo: hot function main".into()],
+        };
+        let mut profile = crate::Profile::default();
+        profile.function_counts.insert("main".into(), 12);
+        profile.branch_counts.insert("entry:main".into(), (4, 8));
+        profile.loop_counts.insert("const-0".into(), 5);
+        let html = render_html("PGO Report", &result, Some(&profile));
+        assert!(html.contains("分支 Profile"));
+        assert!(html.contains("循环 Profile"));
+        assert!(html.contains("66.7%"));
     }
 }
