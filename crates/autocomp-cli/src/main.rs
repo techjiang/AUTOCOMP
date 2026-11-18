@@ -1,4 +1,4 @@
-use autocomp_core::{AutoCompiler, CompileOptions, Profile, Workload};
+use autocomp_core::{AutoCompiler, CompileOptions, Profile, ProfileFormat, Workload};
 use std::fs;
 use std::path::PathBuf;
 use std::time::Duration;
@@ -13,7 +13,7 @@ fn main() -> Result<(), String> {
         "report" => report(&args[2..]),
         "bench" => bench(&args[2..]),
         "help" | "--help" | "-h" => {
-            println!("autocomp <command> [options]\n\nCommands:\n  cc               C compiler\n  c++              C++ compiler\n  profile          collect profile\n  optimize         PGO build\n  report           optimization report\n  bench            quick benchmark\n\nOptions:\n  -O3              enable optimization level 3\n  --instrument     emit instrumented object\n  --pgo=<file>     compile with profile\n  --output=<file>  profile output path");
+            println!("autocomp <command> [options]\n\nCommands:\n  cc               C compiler\n  c++              C++ compiler\n  profile          collect profile\n  optimize         PGO build\n  report           optimization report (HTML)\n  bench            quick benchmark\n\nOptions:\n  -O3              enable optimization level 3\n  --instrument     emit instrumented object\n  --pgo=<file>     compile with profile\n  --output=<file>  output path for profile/report\n  --workload=<s>   workload label for auto PGO");
             Ok(())
         }
         other => Err(format!("unknown command: {other}")),
@@ -21,71 +21,96 @@ fn main() -> Result<(), String> {
 }
 
 fn source_from(args: &[String]) -> Option<PathBuf> {
-    args.iter().filter(|a| !a.starts_with('-')).find(|a| a.ends_with(".c") || a.ends_with(".cc") || a.ends_with(".cpp") || a.ends_with(".rs")).map(PathBuf::from)
+    args.iter().filter(|a| !a.starts_with('-')).find(|a| a.ends_with(".ac") || a.ends_with(".c") || a.ends_with(".cc") || a.ends_with(".cpp") || a.ends_with(".rs")).map(PathBuf::from)
+}
+
+fn option_value(args: &[String], name: &str) -> Option<String> {
+    args.iter().find_map(|a| a.strip_prefix(name).map(str::to_string))
+}
+
+fn load_profile(args: &[String]) -> Result<Option<Profile>, String> {
+    match option_value(args, "--pgo=") {
+        Some(path) => Ok(Some(Profile::from_text(&fs::read_to_string(path).map_err(|e| e.to_string())?)?)),
+        None => Ok(None),
+    }
+}
+
+fn print_result(label: &str, result: &autocomp_core::CompileResult) {
+    println!("{label} {}", result.products.iter().map(|p| p.display().to_string()).collect::<Vec<_>>().join(", "));
+    for decision in &result.decisions {
+        println!("  [decision] {decision}");
+    }
 }
 
 fn compile(args: &[String]) -> Result<(), String> {
     let source = source_from(args).ok_or("missing source file")?;
-    let options = CompileOptions {
+    let profile = load_profile(args)?;
+    let mut options = CompileOptions {
         optimization_level: args.iter().position(|a| a == "-O3").map(|_| 3).unwrap_or(0),
         instrument: args.iter().any(|a| a == "--instrument"),
-        pgo_profile: args.iter().find_map(|a| a.strip_prefix("--pgo=").map(PathBuf::from)),
+        pgo_profile: option_value(args, "--pgo=").map(PathBuf::from),
     };
-    let mut compiler = AutoCompiler::default();
-    let mut result = if let Some(profile_path) = &options.pgo_profile {
-        let text = std::fs::read_to_string(profile_path).map_err(|e| e.to_string())?;
-        let mut profile = Profile::default();
-        for line in text.lines() {
-            let mut parts = line.split_whitespace();
-            if let (Some(name), Some(count)) = (parts.next(), parts.next().and_then(|s| s.parse().ok())) {
-                profile.function_counts.insert(name.into(), count);
-            }
-        }
-        compiler.compile_with_pgo(&source, &profile, &options)?
-    } else {
-        compiler.compile(&source, &options)?
-    };
-    println!("compiled {} -> {}", source.display(), result.products.iter().map(|p| p.display().to_string()).collect::<Vec<_>>().join(", "));
-    for decision in &result.decisions {
-        println!("  [decision] {decision}");
+    if options.instrument {
+        options.pgo_profile = None;
     }
+    let mut compiler = AutoCompiler::default();
+    let result = match profile.as_ref() {
+        Some(profile) if !options.instrument => compiler.compile_with_pgo(&source, profile, &options)?,
+        _ => compiler.compile(&source, &options)?,
+    };
+    print_result("compiled", &result);
     Ok(())
 }
 
 fn auto_pgo(args: &[String]) -> Result<(), String> {
     let source = source_from(args).ok_or("missing source file")?;
-    let workload = Workload { argv: Vec::new(), stdin: None, timeout: Duration::from_secs(60) };
-    let options = CompileOptions::default();
+    let workload_text = option_value(args, "--workload=").unwrap_or_else(|| "default workload".into());
+    let workload = Workload {
+        argv: workload_text.split_whitespace().map(str::to_string).collect(),
+        stdin: None,
+        timeout: Duration::from_secs(60),
+    };
     let mut compiler = AutoCompiler::default();
-    let result = compiler.compile_auto_pgo(&source, &workload, &options)?;
-    println!("auto-pgo {}", result.products.iter().map(|p| p.display().to_string()).collect::<Vec<_>>().join(", "));
-    for decision in &result.decisions {
-        println!("  [decision] {decision}");
-    }
+    let result = compiler.compile_auto_pgo(&source, &workload, &CompileOptions::default())?;
+    print_result("auto-pgo", &result);
     Ok(())
 }
 
 fn profile(args: &[String]) -> Result<(), String> {
     let source = source_from(args).ok_or("missing source file")?;
-    let output = args.iter().find_map(|a| a.strip_prefix("--output=")).map(PathBuf::from).unwrap_or_else(|| PathBuf::from("autoprof.txt"));
-    let module = autocomp_core::ir::Module::from_source(&source)?;
-    let mut text = String::new();
-    for function in module.functions {
-        text.push_str(&format!("{} {}\n", function.name, function.instructions.len().max(1)));
-    }
-    fs::write(&output, text).map_err(|e| e.to_string())?;
-    println!("profile written to {}", output.display());
+    let output = option_value(args, "--output=").map(PathBuf::from).unwrap_or_else(|| PathBuf::from("autoprof.txt"));
+    let mut compiler = AutoCompiler::default();
+    let instrumented = compiler.compile(&source, &CompileOptions { instrument: true, ..CompileOptions::default() })?;
+    let workload = Workload { argv: vec![source.display().to_string()], stdin: None, timeout: Duration::from_secs(60) };
+    let collected = autocomp_core::WorkloadProfile::from_workload(&workload, &instrumented)?;
+    let text = collected.render(ProfileFormat::Text)?;
+    fs::write(&output, &text).map_err(|e| e.to_string())?;
+    println!("profile written to {} ({} samples)", output.display(), collected.sample_count);
+    print!("{text}");
     Ok(())
 }
 
 fn report(args: &[String]) -> Result<(), String> {
-    let input = args.iter().find(|a| !a.starts_with('-')).ok_or("missing object file")?;
-    let text = fs::read_to_string(input).map_err(|e| e.to_string())?;
-    println!("AUTOCOMP optimization report");
-    println!("============================");
-    for line in text.lines().filter(|l| l.starts_with("; function") || l.starts_with("; AUTOCOMP")) {
-        println!("{line}");
-    }
+    let input = args.iter().find(|a| !a.starts_with('-')).ok_or("missing source file")?;
+    let source = if input.ends_with(".o") {
+        PathBuf::from(format!("{}.ac", input.trim_end_matches(".o")))
+    } else {
+        PathBuf::from(input)
+    };
+    let output = option_value(args, "--output=").map(PathBuf::from).unwrap_or_else(|| source.with_extension("report.html"));
+    let profile = load_profile(args)?;
+    let mut compiler = AutoCompiler::default();
+    let options = CompileOptions {
+        pgo_profile: option_value(args, "--pgo=").map(PathBuf::from),
+        ..CompileOptions::default()
+    };
+    let result = match profile.as_ref() {
+        Some(profile) => compiler.compile_with_pgo(&source, profile, &options)?,
+        None => compiler.compile(&source, &options)?,
+    };
+    let html = autocomp_core::report::render_html(&format!("AUTOCOMP Report · {}", source.display()), &result, profile.as_ref());
+    fs::write(&output, html).map_err(|e| e.to_string())?;
+    println!("report written to {}", output.display());
     Ok(())
 }
 

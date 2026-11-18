@@ -9,11 +9,17 @@ cargo test --workspace
 cargo run -p autocomp-cli -- help
 printf 'int main() {\n  %%0 = add 2, 3;\n  return %%0;\n}\n' > demo.ac
 cargo run -p autocomp-cli -- cc demo.ac -O3
+cargo run -p autocomp-cli -- profile demo.ac --output=autoprof.txt
+cargo run -p autocomp-cli -- cc demo.ac --pgo=autoprof.txt
+cargo run -p autocomp-cli -- report demo.ac --pgo=autoprof.txt --output=demo.report.html
+cargo run -p autocomp-cli -- optimize demo.ac --workload='demo --quick'
 ```
 
 当前仓库包含 M1 可运行骨架：
 
-- `autocomp-core`：IR 解析、Profile 合并、优化 Pass、目标文件输出
+- `autocomp-core`：IR 解析、Sub 指令、Profile 文本读写、优化 Pass、目标文件输出、HTML 报告
 - `autocomp-cli`：`cc` / `c++` / `profile` / `optimize` / `report` / `bench`
+- `optimize` 会从插桩产物收集函数采样，再执行 PGO 重编译
+- `report` 会生成带优化决策和热点函数的 HTML 报告
 
 同一个世界，同一个互联网！

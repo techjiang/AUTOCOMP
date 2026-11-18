@@ -15,9 +15,23 @@ pub enum Value {
 pub enum Instruction {
     Const { dest: Id, value: i64 },
     Add { dest: Id, lhs: Value, rhs: Value },
+    Sub { dest: Id, lhs: Value, rhs: Value },
     Mul { dest: Id, lhs: Value, rhs: Value },
     Call { dest: Option<Id>, callee: String, args: Vec<Value> },
     Return(Value),
+}
+
+impl Instruction {
+    pub fn dest(&self) -> Option<Id> {
+        match self {
+            Self::Const { dest, .. }
+            | Self::Add { dest, .. }
+            | Self::Sub { dest, .. }
+            | Self::Mul { dest, .. } => Some(*dest),
+            Self::Call { dest, .. } => *dest,
+            Self::Return(_) => None,
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -59,11 +73,8 @@ impl Module {
                     continue;
                 };
                 let name = signature.name;
-                let arg_ids: Vec<Id> = (0..signature.arg_count).map(|_| {
-                    let id = next_id;
-                    next_id += 1;
-                    id
-                }).collect();
+                let arg_ids: Vec<Id> = (1..=signature.arg_count).collect();
+                next_id += signature.arg_count;
                 let function_id = next_id;
                 next_id += 1;
                 module.functions.push(Function {
@@ -107,10 +118,13 @@ fn parse_function_signature(line: &str) -> Option<(Signature, Option<&str>)> {
     if line.starts_with('}') || line.starts_with(';') {
         return None;
     }
-    let name = line
-        .chars()
-        .take_while(|c| c.is_alphanumeric() || *c == '_')
-        .collect::<String>();
+    let signature_head = line.split_once('(').map(|(left, _)| left).unwrap_or(line);
+    let name = signature_head
+        .split_whitespace()
+        .last()
+        .unwrap_or("")
+        .trim_matches(|c: char| !(c.is_alphanumeric() || c == '_'))
+        .to_string();
     if name.is_empty() || name.chars().next().is_some_and(|c| c.is_ascii_digit()) {
         return None;
     }
@@ -127,15 +141,26 @@ fn parse_function_signature(line: &str) -> Option<(Signature, Option<&str>)> {
 }
 
 fn parse_value(token: &str, arg_ids: &[Id]) -> Value {
-    token.trim().parse::<i64>().map(Value::Const).unwrap_or_else(|_| {
-        if let Some(stripped) = token.trim().strip_prefix('%') {
-            if let Ok(index) = stripped.parse::<usize>() {
+    let token = token.trim().trim_end_matches(',').trim();
+    token.parse::<i64>().map(Value::Const).unwrap_or_else(|_| {
+        if let Some(stripped) = token.strip_prefix('%') {
+            let name = stripped.trim_start_matches('%');
+            if let Some(pos) = arg_ids.iter().position(|id| format!("%arg{id}") == format!("%{name}")) {
+                return Value::Arg(arg_ids[pos]);
+            }
+            let arg_index = if name.len() == 1 && name.as_bytes()[0].is_ascii_lowercase() {
+                Some((name.as_bytes()[0] - b'a') as usize)
+            } else {
+                name.parse::<usize>().ok()
+            };
+            if let Some(index) = arg_index {
                 if let Some(id) = arg_ids.get(index) {
                     return Value::Arg(*id);
                 }
             }
+            return Value::Local(name.bytes().fold(0, |acc, b| acc.wrapping_mul(131).wrapping_add(b as u64)));
         }
-        Value::Local(token.trim().trim_start_matches('%').bytes().fold(0, |acc, b| acc.wrapping_mul(131).wrapping_add(b as u64)))
+        Value::Local(token.bytes().fold(0, |acc, b| acc.wrapping_mul(131).wrapping_add(b as u64)))
     })
 }
 
@@ -152,12 +177,11 @@ fn parse_instruction_into(line: &str, module: &mut Module, function_index: usize
         } else {
             parse_value(value, &arg_ids)
         }))
-    } else if let Some(rest) = line.strip_prefix('%') {
-        let (dest_token, rest) = rest.split_once('=').unwrap_or((rest, ""));
-        let dest = dest_token.trim().parse::<Id>().unwrap_or_else(|_| {
-            let id = *next_id;
+    } else if line.starts_with('%') {
+        let (dest_token, rest) = line.split_once('=').unwrap_or((line, ""));
+        let dest = dest_token.trim().trim_start_matches('%').parse::<Id>().unwrap_or_else(|_| {
             *next_id += 1;
-            id
+            *next_id
         });
         let rest = rest.trim();
         if let Some(callee_expr) = rest.strip_prefix("call ") {
@@ -165,18 +189,17 @@ fn parse_instruction_into(line: &str, module: &mut Module, function_index: usize
             let args_text = callee_expr.split_once('(').and_then(|(_, r)| r.rsplit_once(')')).map(|(a, _)| a).unwrap_or("");
             let args = args_text.split(',').map(|a| a.trim()).filter(|a| !a.is_empty()).map(|a| parse_value(a, &arg_ids)).collect();
             Some(Instruction::Call { dest: Some(dest), callee, args })
-        } else if let Some(expr) = rest.strip_prefix("add ") {
-            let mut parts = expr.split_whitespace();
-            let lhs = parts.next().map(|v| parse_value(v, &arg_ids)).unwrap_or(Value::Const(0));
-            let rhs = parts.next().map(|v| parse_value(v, &arg_ids)).unwrap_or(Value::Const(0));
-            Some(Instruction::Add { dest, lhs, rhs })
-        } else if let Some(expr) = rest.strip_prefix("mul ") {
-            let mut parts = expr.split_whitespace();
-            let lhs = parts.next().map(|v| parse_value(v, &arg_ids)).unwrap_or(Value::Const(0));
-            let rhs = parts.next().map(|v| parse_value(v, &arg_ids)).unwrap_or(Value::Const(0));
-            Some(Instruction::Mul { dest, lhs, rhs })
         } else {
-            rest.parse::<i64>().ok().map(|value| Instruction::Const { dest, value })
+            let (op, expr) = rest.split_once(' ').unwrap_or((rest, ""));
+            let mut parts = expr.split(',');
+            let lhs = parts.next().map(|v| parse_value(v, &arg_ids)).unwrap_or(Value::Const(0));
+            let rhs = parts.next().map(|v| parse_value(v, &arg_ids)).unwrap_or(Value::Const(0));
+            match op {
+                "add" => Some(Instruction::Add { dest, lhs, rhs }),
+                "sub" => Some(Instruction::Sub { dest, lhs, rhs }),
+                "mul" => Some(Instruction::Mul { dest, lhs, rhs }),
+                _ => rest.parse::<i64>().ok().map(|value| Instruction::Const { dest, value }),
+            }
         }
     } else {
         None
@@ -221,8 +244,8 @@ mod tests {
         assert_eq!(module.functions.len(), 2);
         assert_eq!(module.functions[0].name, "add");
         assert_eq!(module.functions[0].instructions.len(), 2);
-        assert_eq!(module.functions[0].instructions[0], Instruction::Add { dest: 3, lhs: Value::Arg(1), rhs: Value::Arg(2) });
-        assert_eq!(module.functions[1].instructions[0], Instruction::Call { dest: Some(5), callee: "add".into(), args: vec![Value::Const(2), Value::Const(3)] });
+        assert_eq!(module.functions[0].instructions[0], Instruction::Add { dest: 0, lhs: Value::Arg(1), rhs: Value::Arg(2) });
+        assert_eq!(module.functions[1].instructions[0], Instruction::Call { dest: Some(1), callee: "add".into(), args: vec![Value::Const(2), Value::Const(3)] });
         std::fs::remove_file(path).unwrap();
         std::fs::remove_dir(dir).unwrap();
     }

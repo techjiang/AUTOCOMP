@@ -23,12 +23,15 @@ impl OptimizationPass for ConstantFolding {
     fn name(&self) -> &str { "constant-folding" }
 
     fn run(&mut self, module: &mut Module, _ctx: &PassContext) -> Result<PassResult, String> {
-        let mut changed = false;
+        let mut folded_count = 0;
         for func in &mut module.functions {
             for inst in &mut func.instructions {
                 let folded = match inst {
                     Instruction::Add { dest, lhs: Value::Const(a), rhs: Value::Const(b) } => {
                         Some(Instruction::Const { dest: *dest, value: a.wrapping_add(*b) })
+                    }
+                    Instruction::Sub { dest, lhs: Value::Const(a), rhs: Value::Const(b) } => {
+                        Some(Instruction::Const { dest: *dest, value: a.wrapping_sub(*b) })
                     }
                     Instruction::Mul { dest, lhs: Value::Const(a), rhs: Value::Const(b) } => {
                         Some(Instruction::Const { dest: *dest, value: a.wrapping_mul(*b) })
@@ -37,11 +40,14 @@ impl OptimizationPass for ConstantFolding {
                 };
                 if let Some(new_inst) = folded {
                     *inst = new_inst;
-                    changed = true;
+                    folded_count += 1;
                 }
             }
         }
-        Ok(PassResult { changed, note: "fold constant arithmetic".into() })
+        Ok(PassResult {
+            changed: folded_count > 0,
+            note: format!("fold {folded_count} constant arithmetic expressions"),
+        })
     }
 }
 
@@ -51,32 +57,47 @@ impl OptimizationPass for DeadCodeElimination {
     fn name(&self) -> &str { "dce" }
 
     fn run(&mut self, module: &mut Module, _ctx: &PassContext) -> Result<PassResult, String> {
-        let mut changed = false;
+        let mut removed = 0;
         for func in &mut module.functions {
             let mut used = std::collections::HashSet::new();
-            for inst in &func.instructions {
-                match inst {
-                    Instruction::Add { lhs, rhs, .. } | Instruction::Mul { lhs, rhs, .. } => {
-                        collect_value_ids(lhs, &mut used);
-                        collect_value_ids(rhs, &mut used);
-                    }
-                    Instruction::Call { args, .. } => {
-                        for arg in args {
-                            collect_value_ids(arg, &mut used);
+            for inst in func.instructions.iter().rev() {
+                let needed = match inst {
+                    Instruction::Return(_) | Instruction::Call { dest: None, .. } => true,
+                    Instruction::Call { dest: Some(dest), .. }
+                    | Instruction::Const { dest, .. }
+                    | Instruction::Add { dest, .. }
+                    | Instruction::Sub { dest, .. }
+                    | Instruction::Mul { dest, .. } => used.contains(dest),
+                };
+                if needed {
+                    match inst {
+                        Instruction::Add { lhs, rhs, .. }
+                        | Instruction::Sub { lhs, rhs, .. }
+                        | Instruction::Mul { lhs, rhs, .. } => {
+                            collect_value_ids(lhs, &mut used);
+                            collect_value_ids(rhs, &mut used);
                         }
+                        Instruction::Call { args, .. } => {
+                            for arg in args {
+                                collect_value_ids(arg, &mut used);
+                            }
+                        }
+                        Instruction::Return(value) => collect_value_ids(value, &mut used),
+                        Instruction::Const { .. } => {}
                     }
-                    Instruction::Return(value) => collect_value_ids(value, &mut used),
-                    Instruction::Const { .. } => {}
                 }
             }
             let before = func.instructions.len();
             func.instructions.retain(|inst| match inst {
-                Instruction::Const { dest } => used.contains(dest),
+                Instruction::Const { dest, .. } => used.contains(dest),
                 _ => true,
             });
-            changed |= func.instructions.len() != before;
+            removed += before - func.instructions.len();
         }
-        Ok(PassResult { changed, note: "remove unused constants".into() })
+        Ok(PassResult {
+            changed: removed > 0,
+            note: format!("remove {removed} unused constants"),
+        })
     }
 }
 
@@ -93,10 +114,10 @@ impl OptimizationPass for HotCallHint {
     fn name(&self) -> &str { "hot-call-hint" }
 
     fn run(&mut self, _module: &mut Module, ctx: &PassContext) -> Result<PassResult, String> {
-        let count = ctx.profile.map(|p| p.function_counts.len()).unwrap_or(0);
+        let count = ctx.profile.map(|p| p.function_counts.values().filter(|v| **v > 0).count()).unwrap_or(0);
         Ok(PassResult {
             changed: false,
-            note: format!("profile functions: {count}"),
+            note: format!("profile functions with samples: {count}"),
         })
     }
 }
@@ -124,6 +145,7 @@ mod tests {
                 Instruction::Const { dest: 1, value: 2 },
                 Instruction::Const { dest: 2, value: 3 },
                 Instruction::Add { dest: 3, lhs: Value::Const(2), rhs: Value::Const(3) },
+                Instruction::Return(Value::Local(3)),
             ],
         });
         let ctx = PassContext { profile: None };
@@ -132,6 +154,6 @@ mod tests {
         assert_eq!(module.functions[0].instructions[2], Instruction::Const { dest: 3, value: 5 });
         let mut dce = DeadCodeElimination;
         assert!(dce.run(&mut module, &ctx).unwrap().changed);
-        assert_eq!(module.functions[0].instructions, vec![Instruction::Const { dest: 3, value: 5 }]);
+        assert_eq!(module.functions[0].instructions, vec![Instruction::Const { dest: 3, value: 5 }, Instruction::Return(Value::Local(3))]);
     }
 }

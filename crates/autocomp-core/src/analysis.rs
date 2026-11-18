@@ -14,23 +14,15 @@ impl FeatureSet {
             function_count: module.functions.len(),
             ..Self::default()
         };
-        for func in &module.functions {
-            for inst in &func.instructions {
-                features.instruction_count += 1;
-                match inst {
-                    Instruction::Const { .. } => features.constant_count += 1,
-                    Instruction::Call { .. } => features.call_count += 1,
-                    _ => {}
-                }
-            }
-            features.instruction_count += func.args.len();
-        }
+        features.instruction_count = module.functions.iter().map(|f| f.instructions.len() + f.args.len()).sum();
+        features.constant_count = module.functions.iter().flat_map(|f| &f.instructions).filter(|i| matches!(i, Instruction::Const { .. })).count();
+        features.call_count = module.functions.iter().flat_map(|f| &f.instructions).filter(|i| matches!(i, Instruction::Call { .. })).count();
         features
     }
 
     pub fn hot_functions(&self, counts: &std::collections::HashMap<String, u64>) -> Vec<String> {
-        let mut names: Vec<_> = counts.iter().map(|(k, v)| (k.clone(), *v)).collect();
-        names.sort_by(|a, b| b.1.cmp(&a.1));
+        let mut names: Vec<_> = counts.iter().filter(|(_, v)| **v > 0).map(|(k, v)| (k.clone(), *v)).collect();
+        names.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
         names.into_iter().take(5).map(|(k, _)| k).collect()
     }
 }
