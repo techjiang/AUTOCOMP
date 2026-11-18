@@ -1,0 +1,11 @@
+[package]
+name = "autocomp-cli"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "autocomp"
+path = "src/main.rs"
+
+[dependencies]
+autocomp-core = { path = "../autocomp-core" }
