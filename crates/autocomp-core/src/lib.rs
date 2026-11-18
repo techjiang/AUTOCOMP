@@ -68,29 +68,37 @@ impl Default for AutoCompiler {
 }
 
 impl AutoCompiler {
-    pub fn compile(&mut self, source: &Path, _options: &CompileOptions) -> Result<CompileResult, String> {
+    pub fn compile(&mut self, source: &Path, options: &CompileOptions) -> Result<CompileResult, String> {
         let mut module = Module::from_source(source)?;
-        self.run_passes(&mut module, None)?;
-        Ok(CompileResult {
-            products: vec![source.with_extension("o")],
+        let decisions = self.run_passes(&mut module, None)?;
+        let mut result = CompileResult {
+            products: vec![write_object(source, &module, options)?],
             features: FeatureSet::from_module(&module),
-            decisions: Vec::new(),
-        })
+            decisions,
+        };
+        result.decisions.insert(0, format!("backend: emit object for {}", module.name));
+        Ok(result)
     }
 
     pub fn compile_with_pgo(
         &mut self,
         source: &Path,
         profile: &Profile,
-        _options: &CompileOptions,
+        options: &CompileOptions,
     ) -> Result<CompileResult, String> {
         let mut module = Module::from_source(source)?;
-        self.run_passes(&mut module, Some(profile))?;
-        Ok(CompileResult {
-            products: vec![source.with_extension("o")],
+        let mut decisions = self.run_passes(&mut module, Some(profile))?;
+        let mut result = CompileResult {
+            products: vec![write_object(source, &module, options)?],
             features: FeatureSet::from_module(&module),
             decisions: Vec::new(),
-        })
+        };
+        if let Some(hot) = FeatureSet::from_module(&module).hot_functions(&profile.function_counts).first() {
+            decisions.insert(0, format!("pgo: hot function {}", hot));
+        }
+        result.decisions = decisions;
+        result.decisions.insert(0, "backend: emit optimized object".into());
+        Ok(result)
     }
 
     pub fn compile_auto_pgo(
@@ -111,11 +119,52 @@ impl AutoCompiler {
             })
     }
 
-    fn run_passes(&mut self, module: &mut Module, profile: Option<&Profile>) -> Result<(), String> {
+    fn run_passes(&mut self, module: &mut Module, profile: Option<&Profile>) -> Result<Vec<String>, String> {
         let ctx = PassContext { profile };
+        let mut decisions = Vec::new();
         for pass in &mut self.passes {
-            let _ = pass.run(module, &ctx)?;
+            let result = pass.run(module, &ctx)?;
+            if result.changed {
+                decisions.push(format!("{}: {}", pass.name(), result.note));
+            }
         }
-        Ok(())
+        Ok(decisions)
+    }
+}
+
+fn write_object(source: &Path, module: &Module, options: &CompileOptions) -> Result<PathBuf, String> {
+    let suffix = if options.instrument { "instr.o" } else if options.pgo_profile.is_some() { "opt.o" } else { "o" };
+    let object = source.with_extension(suffix);
+    let mut lines = vec![
+        format!("; AUTOCOMP object for {}", module.name),
+        format!("; optimization-level={} instrument={}", options.optimization_level, options.instrument),
+    ];
+    for function in &module.functions {
+        lines.push(format!("; function {} id={} args={}", function.name, function.id, function.args.len()));
+        for instruction in &function.instructions {
+            lines.push(format!("{:?}", instruction));
+        }
+    }
+    std::fs::write(&object, lines.join("\n") + "\n")
+        .map_err(|e| format!("cannot write {}: {e}", object.display()))?;
+    Ok(object)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn compile_emits_object() {
+        let dir = std::env::temp_dir().join(format!("autocomp-compile-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let source = dir.join("demo.ac");
+        std::fs::write(&source, "int f(int a) {\n  %0 = add %a, 1;\n  return %0;\n}\n").unwrap();
+        let mut compiler = AutoCompiler::default();
+        let result = compiler.compile(&source, &CompileOptions::default()).unwrap();
+        assert_eq!(result.products.len(), 1);
+        assert!(result.products[0].exists());
+        assert!(!result.decisions.is_empty());
+        std::fs::remove_dir_all(dir).unwrap();
     }
 }

@@ -49,4 +49,13 @@ mod tests {
         assert!(!is_zero(&Value::Const(1)));
         assert!(!is_zero(&Value::Local(3)));
     }
+
+    #[test]
+    fn hot_functions_are_sorted() {
+        let mut counts = std::collections::HashMap::new();
+        counts.insert("cold".into(), 1);
+        counts.insert("hot".into(), 99);
+        let features = FeatureSet::default();
+        assert_eq!(features.hot_functions(&counts), vec!["hot".to_string(), "cold".to_string()]);
+    }
 }

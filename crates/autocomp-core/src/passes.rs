@@ -1,4 +1,4 @@
-use crate::ir::{Instruction, Module, Value};
+use crate::ir::{Id, Instruction, Module, Value};
 use crate::Profile;
 
 pub trait OptimizationPass {
@@ -53,11 +53,37 @@ impl OptimizationPass for DeadCodeElimination {
     fn run(&mut self, module: &mut Module, _ctx: &PassContext) -> Result<PassResult, String> {
         let mut changed = false;
         for func in &mut module.functions {
+            let mut used = std::collections::HashSet::new();
+            for inst in &func.instructions {
+                match inst {
+                    Instruction::Add { lhs, rhs, .. } | Instruction::Mul { lhs, rhs, .. } => {
+                        collect_value_ids(lhs, &mut used);
+                        collect_value_ids(rhs, &mut used);
+                    }
+                    Instruction::Call { args, .. } => {
+                        for arg in args {
+                            collect_value_ids(arg, &mut used);
+                        }
+                    }
+                    Instruction::Return(value) => collect_value_ids(value, &mut used),
+                    Instruction::Const { .. } => {}
+                }
+            }
             let before = func.instructions.len();
-            func.instructions.retain(|inst| !matches!(inst, Instruction::Const { .. }));
+            func.instructions.retain(|inst| match inst {
+                Instruction::Const { dest } => used.contains(dest),
+                _ => true,
+            });
             changed |= func.instructions.len() != before;
         }
         Ok(PassResult { changed, note: "remove unused constants".into() })
+    }
+}
+
+fn collect_value_ids(value: &Value, used: &mut std::collections::HashSet<Id>) {
+    match value {
+        Value::Local(id) | Value::Arg(id) => { used.insert(*id); }
+        Value::Const(_) => {}
     }
 }
 
@@ -106,6 +132,6 @@ mod tests {
         assert_eq!(module.functions[0].instructions[2], Instruction::Const { dest: 3, value: 5 });
         let mut dce = DeadCodeElimination;
         assert!(dce.run(&mut module, &ctx).unwrap().changed);
-        assert!(module.functions[0].instructions.is_empty());
+        assert_eq!(module.functions[0].instructions, vec![Instruction::Const { dest: 3, value: 5 }]);
     }
 }
