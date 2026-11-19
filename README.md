@@ -12,6 +12,7 @@ cargo run -p autocomp-cli -- cc demo.ac -O3
 cargo run -p autocomp-cli -- profile demo.ac --output=autoprof.txt
 cargo run -p autocomp-cli -- cc demo.ac --pgo=autoprof.txt
 cargo run -p autocomp-cli -- report demo.ac --pgo=autoprof.txt --baseline --output=demo.report.html
+cargo run -p autocomp-cli -- report demo.ac --pgo=autoprof.txt --baseline --format=json --output=demo.report.json
 cargo run -p autocomp-cli -- optimize demo.ac --workload='demo --quick'
 ```
 
@@ -23,6 +24,8 @@ cargo run -p autocomp-cli -- optimize demo.ac --workload='demo --quick'
 - IR 解析后会做定义/使用校验，重复定义或未定义值会直接报错
 - `optimize` 默认执行自动 PGO 生成的样例程序，可用 `--no-run` 关闭
 - `report --baseline` 会在 HTML 报告里加入 PGO 对照表
+- `report --format=json` 可输出可机读的 JSON 报告，HTML 报告新增性能摘要
+- Profile 会驱动分支布局和循环分块提示，随优化决策一起展示
 - `report` 会生成带优化决策、热点函数、分支与循环 Profile 的 HTML 报告
 
 同一个世界，同一个互联网！

@@ -17,7 +17,8 @@ fn main() -> Result<(), String> {
         "help" | "--help" | "-h" => {
             println!("autocomp <command> [options]\n\nCommands:\n  cc               C compiler\n  c++              C++ compiler\n  profile          collect profile\n  optimize         PGO build\n  report           optimization report (HTML)\n  bench            quick benchmark\n\nOptions:\n  -O3              enable optimization level 3\n  --instrument     emit instrumented object\n  --pgo=<file>     compile with profile\n  --output=<file>  output path for profile/report\n  --workload=<s>   workload label for auto PGO
   --no-run         skip running the generated demo binary
-  --baseline       compare optimized result with a plain build in report");
+  --baseline       compare optimized result with a plain build in report
+  --format=json    emit JSON report instead of HTML");
             Ok(())
         }
         other => Err(format!("unknown command: {other}")),
@@ -137,8 +138,18 @@ fn report(args: &[String]) -> Result<(), String> {
     } else {
         None
     };
-    let html = autocomp_core::report::render_html(&format!("AUTOCOMP Report · {}", source.display()), &result, profile.as_ref(), baseline.as_ref());
-    fs::write(&output, html).map_err(|e| e.to_string())?;
+    let format = match option_value(args, "--format=").as_deref() {
+        Some("json") => autocomp_core::report::ReportFormat::Json,
+        Some("html") | None => autocomp_core::report::ReportFormat::Html,
+        Some(other) => return Err(format!("unsupported report format: {other}")),
+    };
+    let output = if format == autocomp_core::report::ReportFormat::Json && output.extension().and_then(|e| e.to_str()) == Some("html") {
+        output.with_extension("json")
+    } else {
+        output
+    };
+    let text = autocomp_core::report::render(&format!("AUTOCOMP Report · {}", source.display()), &result, profile.as_ref(), baseline.as_ref(), format);
+    fs::write(&output, text).map_err(|e| e.to_string())?;
     println!("report written to {}", output.display());
     Ok(())
 }

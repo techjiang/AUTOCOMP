@@ -9,3 +9,4 @@
 - `optimize` 默认运行自动 PGO 生成的样例程序，便于端到端演示
 - `optimize --no-run` 仍会写出 Profile，便于离线 PGO
 - `report --baseline` 展示 PGO 与基线编译的决策和产物对照
+- Profile 驱动分支布局与循环分块提示进入默认 Pass，报告新增 JSON 格式与性能摘要

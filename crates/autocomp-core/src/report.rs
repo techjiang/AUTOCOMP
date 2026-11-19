@@ -1,5 +1,58 @@
 use crate::{CompileResult, Profile};
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ReportFormat {
+    Html,
+    Json,
+}
+
+
+pub fn render(title: &str, result: &CompileResult, profile: Option<&Profile>, baseline: Option<&CompileResult>, format: ReportFormat) -> String {
+    match format {
+        ReportFormat::Html => render_html(title, result, profile, baseline),
+        ReportFormat::Json => render_json(title, result, profile, baseline),
+    }
+}
+
+pub fn render_json(title: &str, result: &CompileResult, profile: Option<&Profile>, baseline: Option<&CompileResult>) -> String {
+    fn escape(value: &str) -> String {
+        let mut out = String::new();
+        for ch in value.chars() {
+            match ch {
+                '"' => out.push_str("\\\""),
+                '\\' => out.push_str("\\\\"),
+                '\n' => out.push_str("\\n"),
+                '\r' => out.push_str("\\r"),
+                '\t' => out.push_str("\\t"),
+                c if c.is_control() => out.push_str(&format!("\\u{:04x}", c as u32)),
+                c => out.push(c),
+            }
+        }
+        out
+    }
+    fn array(values: impl IntoIterator<Item = String>) -> String {
+        format!("[{}]", values.into_iter().map(|v| format!("\"{v}\"")).collect::<Vec<_>>().join(","))
+    }
+    let products = array(result.products.iter().map(|p| escape(&p.display().to_string())));
+    let decisions = array(result.decisions.iter().map(|d| escape(d)));
+    let hot = profile.map(|p| result.features.hot_functions(&p.function_counts)).unwrap_or_default();
+    let hot_counts = profile.map(|p| hot.iter().map(|name| format!("[\"{}\",{}]", escape(name), p.function_counts.get(name).copied().unwrap_or(0))).collect::<Vec<_>>().join(",")).unwrap_or_default();
+    let baseline_json = baseline.map(|base| format!(
+        "{{\"decisions\":{},\"products\":{}}}",
+        base.decisions.len(), base.products.len()
+    )).unwrap_or_else(|| "null".into());
+    let profile_json = profile.map(|p| format!(
+        "{{\"functions\":{},\"branches\":{},\"loops\":{},\"hot\":[{}]}}",
+        p.function_counts.len(), p.branch_counts.len(), p.loop_counts.len(), hot_counts
+    )).unwrap_or_else(|| "null".into());
+    format!(
+        "{{\"title\":\"{}\",\"features\":{{\"functions\":{},\"instructions\":{},\"calls\":{},\"constants\":{}}},\"products\":{},\"decisions\":{},\"profile\":{},\"baseline\":{}}}",
+        escape(title), result.features.function_count, result.features.instruction_count,
+        result.features.call_count, result.features.constant_count,
+        products, decisions, profile_json, baseline_json
+    )
+}
+
 pub fn render_html(title: &str, result: &CompileResult, profile: Option<&Profile>, baseline: Option<&CompileResult>) -> String {
     let escape = |s: &str| {
         s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;")
@@ -52,6 +105,21 @@ pub fn render_html(title: &str, result: &CompileResult, profile: Option<&Profile
             base.products.len(), result.products.len(), products_delta,
         )
     }).unwrap_or_default();
+    let perf_section = baseline.map(|base| {
+        let decisions_delta = result.decisions.len() as i64 - base.decisions.len() as i64;
+        let kept_instructions = result.features.instruction_count as i64 - base.features.instruction_count as i64;
+        format!(
+            "<h2>性能摘要</h2><div class=\"panel\">优化决策 {}（{}） · 指令 {}（{}） · 产物 {}</div>",
+            result.decisions.len(),
+            if decisions_delta >= 0 { format!("+{decisions_delta}") } else { decisions_delta.to_string() },
+            result.features.instruction_count,
+            if kept_instructions >= 0 { format!("+{kept_instructions}") } else { kept_instructions.to_string() },
+            result.products.len(),
+        )
+    }).unwrap_or_else(|| format!(
+        "<h2>性能摘要</h2><div class=\"panel\">优化决策 {} · 指令 {} · 产物 {}</div>",
+        result.decisions.len(), result.features.instruction_count, result.products.len()
+    ));
     let hot_section = if hot_rows.is_empty() {
         String::new()
     } else {
@@ -68,6 +136,7 @@ pub fn render_html(title: &str, result: &CompileResult, profile: Option<&Profile
         result.features.constant_count,
         products,
         decisions,
+        perf_section,
         baseline_section,
         hot_section,
         branch_section,
@@ -108,6 +177,27 @@ mod tests {
         assert!(html.contains("分支 Profile"));
         assert!(html.contains("循环 Profile"));
         assert!(html.contains("66.7%"));
+    }
+
+    #[test]
+    fn json_report_includes_profile_and_baseline() {
+        let result = CompileResult {
+            products: vec![PathBuf::from("demo.opt.o")],
+            features: crate::FeatureSet::default(),
+            decisions: vec!["pgo: hot function main".into()],
+        };
+        let baseline = CompileResult {
+            products: vec![PathBuf::from("demo.o")],
+            features: crate::FeatureSet::default(),
+            decisions: vec!["backend: emitted demo.o".into()],
+        };
+        let mut profile = crate::Profile::default();
+        profile.function_counts.insert("main".into(), 9);
+        let json = render_json("AUTOCOMP", &result, Some(&profile), Some(&baseline));
+        assert!(json.contains("\"title\":\"AUTOCOMP\""));
+        assert!(json.contains("\"profile\""));
+        assert!(json.contains("\"baseline\""));
+        assert!(json.contains("main"));
     }
 
     #[test]

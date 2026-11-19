@@ -174,13 +174,73 @@ pub struct HotCallHint;
 impl OptimizationPass for HotCallHint {
     fn name(&self) -> &str { "hot-call-hint" }
 
-    fn run(&mut self, _module: &mut Module, ctx: &PassContext) -> Result<PassResult, String> {
-        let count = ctx.profile.map(|p| p.function_counts.values().filter(|v| **v > 0).count()).unwrap_or(0);
+    fn run(&mut self, module: &mut Module, ctx: &PassContext) -> Result<PassResult, String> {
+        let Some(profile) = ctx.profile else {
+            return Ok(PassResult { changed: false, note: "no profile".into() });
+        };
+        let mut hints = 0;
+        for func in &module.functions {
+            let total = profile.function_counts.get(&func.name).copied().unwrap_or(0);
+            if total > 0 {
+                hints += 1;
+            }
+        }
         Ok(PassResult {
             changed: false,
-            note: format!("profile functions with samples: {count}"),
+            note: format!("mark {hints} functions as hot: {}", hot_function_names(profile, module, 5).join(", ")),
         })
     }
+}
+
+pub struct BranchLayout;
+
+impl OptimizationPass for BranchLayout {
+    fn name(&self) -> &str { "branch-layout" }
+
+    fn run(&mut self, _module: &mut Module, ctx: &PassContext) -> Result<PassResult, String> {
+        let Some(profile) = ctx.profile else {
+            return Ok(PassResult { changed: false, note: "no profile".into() });
+        };
+        let mut branches: Vec<_> = profile.branch_counts.iter().collect();
+        branches.sort_by(|a, b| (b.1.0 + b.1.1).cmp(&(a.1.0 + a.1.1)).then(a.0.cmp(b.0)));
+        let top = branches.iter().take(5).map(|(name, (false_count, true_count))| {
+            let total = false_count + true_count;
+            let bias = if total == 0 { 0.0 } else { *true_count as f64 * 100.0 / total as f64 };
+            format!("{name} (true {bias:.0}%)")
+        }).collect::<Vec<_>>().join(", ");
+        Ok(PassResult {
+            changed: false,
+            note: format!("layout {} hot branches: {}", branches.len().min(5), if top.is_empty() { "none".into() } else { top }),
+        })
+    }
+}
+
+pub struct LoopTilingHint;
+
+impl OptimizationPass for LoopTilingHint {
+    fn name(&self) -> &str { "loop-tiling-hint" }
+
+    fn run(&mut self, _module: &mut Module, ctx: &PassContext) -> Result<PassResult, String> {
+        let Some(profile) = ctx.profile else {
+            return Ok(PassResult { changed: false, note: "no profile".into() });
+        };
+        let mut loops: Vec<_> = profile.loop_counts.iter().collect();
+        loops.sort_by(|a, b| b.1.cmp(a.1).then(a.0.cmp(b.0)));
+        let top = loops.iter().take(3).map(|(name, count)| format!("{name} x{count}")).collect::<Vec<_>>().join(", ");
+        Ok(PassResult {
+            changed: false,
+            note: format!("tile {} hot loops: {}", loops.len().min(3), if top.is_empty() { "none".into() } else { top }),
+        })
+    }
+}
+
+fn hot_function_names(profile: &Profile, module: &Module, limit: usize) -> Vec<String> {
+    let mut names = profile.function_counts.iter()
+        .filter(|(name, _)| module.functions.iter().any(|f| &f.name == *name))
+        .map(|(name, count)| (name.clone(), *count))
+        .collect::<Vec<_>>();
+    names.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+    names.into_iter().take(limit).map(|(name, _)| name).collect()
 }
 
 pub fn default_passes() -> Vec<Box<dyn OptimizationPass>> {
@@ -189,6 +249,8 @@ pub fn default_passes() -> Vec<Box<dyn OptimizationPass>> {
         Box::new(AlgebraicSimplification),
         Box::new(DeadCodeElimination),
         Box::new(HotCallHint),
+        Box::new(BranchLayout),
+        Box::new(LoopTilingHint),
     ]
 }
 
@@ -211,6 +273,33 @@ mod tests {
         let ctx = PassContext { profile: None };
         let mut pass = AlgebraicSimplification;
         assert!(!pass.run(&mut module, &ctx).unwrap().changed);
+    }
+
+    #[test]
+    fn profile_passes_report_hot_branches_and_loops() {
+        let module = Module::default();
+        let mut profile = Profile::default();
+        profile.function_counts.insert("main".into(), 12);
+        profile.branch_counts.insert("entry:main".into(), (4, 8));
+        profile.loop_counts.insert("const-0".into(), 6);
+        let ctx = PassContext { profile: Some(&profile) };
+        let mut branch = BranchLayout;
+        let branch_result = branch.run(&mut module_clone(), &ctx).unwrap();
+        assert!(branch_result.note.contains("entry:main"));
+        let mut loops = LoopTilingHint;
+        let loop_result = loops.run(&mut module_clone(), &ctx).unwrap();
+        assert!(loop_result.note.contains("const-0"));
+    }
+
+    fn module_clone() -> Module {
+        let mut module = Module::default();
+        module.functions.push(crate::ir::Function {
+            id: 1,
+            name: "main".into(),
+            args: vec![],
+            instructions: vec![Instruction::Return(Value::Const(0))],
+        });
+        module
     }
 
     #[test]
