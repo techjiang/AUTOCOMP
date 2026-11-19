@@ -21,10 +21,15 @@ impl FeatureSet {
     }
 
     pub fn hot_functions(&self, counts: &std::collections::HashMap<String, u64>) -> Vec<String> {
-        let mut names: Vec<_> = counts.iter().filter(|(_, v)| **v > 0).map(|(k, v)| (k.clone(), *v)).collect();
-        names.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
-        names.into_iter().take(5).map(|(k, _)| k).collect()
+        ranked_profile_entries(counts, 5).into_iter().map(|(name, _)| name).collect()
     }
+}
+
+pub fn ranked_profile_entries(counts: &std::collections::HashMap<String, u64>, limit: usize) -> Vec<(String, u64)> {
+    let mut entries: Vec<_> = counts.iter().filter(|(_, v)| **v > 0).map(|(k, v)| (k.clone(), *v)).collect();
+    entries.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+    entries.truncate(limit);
+    entries
 }
 
 pub fn is_zero(value: &Value) -> bool {

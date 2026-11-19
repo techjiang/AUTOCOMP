@@ -108,33 +108,19 @@ fn collect_value_ids(value: &Value, used: &mut std::collections::HashSet<Id>) {
     }
 }
 
-pub struct AlgebraicSimplification;
+pub struct StrengthReduction;
 
-impl OptimizationPass for AlgebraicSimplification {
-    fn name(&self) -> &str { "algebraic-simplification" }
+impl OptimizationPass for StrengthReduction {
+    fn name(&self) -> &str { "strength-reduction" }
 
     fn run(&mut self, module: &mut Module, _ctx: &PassContext) -> Result<PassResult, String> {
-        let mut simplified = 0;
+        let mut reduced = 0;
         for func in &mut module.functions {
             for inst in &mut func.instructions {
                 let replacement = match inst {
-                    Instruction::Add { dest, lhs: Value::Const(0), rhs: Value::Const(value) } => {
-                        Some(Instruction::Const { dest: *dest, value: *value })
-                    }
-                    Instruction::Add { dest, lhs: Value::Const(value), rhs: Value::Const(0) } => {
-                        Some(Instruction::Const { dest: *dest, value: *value })
-                    }
-                    Instruction::Sub { dest, lhs: Value::Const(value), rhs: Value::Const(0) } => {
-                        Some(Instruction::Const { dest: *dest, value: *value })
-                    }
-                    Instruction::Mul { dest, lhs: Value::Const(1), rhs: Value::Const(value) } => {
-                        Some(Instruction::Const { dest: *dest, value: *value })
-                    }
-                    Instruction::Mul { dest, lhs: Value::Const(value), rhs: Value::Const(1) } => {
-                        Some(Instruction::Const { dest: *dest, value: *value })
-                    }
-                    Instruction::Mul { dest, lhs: Value::Const(0), .. }
-                    | Instruction::Mul { dest, rhs: Value::Const(0), .. } => {
+                    Instruction::Mul { dest, lhs: Value::Const(value), rhs: Value::Const(0) }
+                    | Instruction::Mul { dest, lhs: Value::Const(0), rhs: Value::Const(value) } => {
+                        let _ = value;
                         Some(Instruction::Const { dest: *dest, value: 0 })
                     }
                     _ => None,
@@ -142,14 +128,14 @@ impl OptimizationPass for AlgebraicSimplification {
                 if let Some(new_inst) = replacement {
                     if &new_inst != inst {
                         *inst = new_inst;
-                        simplified += 1;
+                        reduced += 1;
                     }
                 }
             }
         }
         Ok(PassResult {
-            changed: simplified > 0,
-            note: format!("simplify {simplified} algebraic identities"),
+            changed: reduced > 0,
+            note: format!("reduce {reduced} multiplication identities"),
         })
     }
 }
@@ -220,18 +206,18 @@ impl OptimizationPass for LoopTilingHint {
 }
 
 fn hot_function_names(profile: &Profile, module: &Module, limit: usize) -> Vec<String> {
-    let mut names = profile.function_counts.iter()
-        .filter(|(name, _)| module.functions.iter().any(|f| &f.name == *name))
-        .map(|(name, count)| (name.clone(), *count))
-        .collect::<Vec<_>>();
-    names.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
-    names.into_iter().take(limit).map(|(name, _)| name).collect()
+    crate::analysis::ranked_profile_entries(&profile.function_counts, usize::MAX)
+        .into_iter()
+        .filter(|(name, _)| module.functions.iter().any(|f| &f.name == name))
+        .take(limit)
+        .map(|(name, _)| name)
+        .collect()
 }
 
 pub fn default_passes() -> Vec<Box<dyn OptimizationPass>> {
     vec![
         Box::new(ConstantFolding),
-        Box::new(AlgebraicSimplification),
+        Box::new(StrengthReduction),
         Box::new(DeadCodeElimination),
         Box::new(HotCallHint),
         Box::new(BranchLayout),
@@ -244,24 +230,25 @@ mod tests {
     use super::*;
 
     #[test]
-    fn algebraic_simplification_runs() {
+    fn strength_reduction_runs() {
         let mut module = Module::default();
         module.functions.push(crate::ir::Function {
             id: 1,
             name: "f".into(),
-            args: vec![1],
+            args: vec![],
             instructions: vec![
-                Instruction::Mul { dest: 2, lhs: Value::Arg(1), rhs: Value::Const(1) },
+                Instruction::Mul { dest: 2, lhs: Value::Const(9), rhs: Value::Const(0) },
                 Instruction::Return(Value::Local(2)),
             ],
         });
         let ctx = PassContext { profile: None };
-        let mut pass = AlgebraicSimplification;
-        assert!(!pass.run(&mut module, &ctx).unwrap().changed);
+        let mut pass = StrengthReduction;
+        assert!(pass.run(&mut module, &ctx).unwrap().changed);
+        assert_eq!(module.functions[0].instructions[0], Instruction::Const { dest: 2, value: 0 });
     }
 
     #[test]
-    fn algebraic_simplification_is_stable() {
+    fn strength_reduction_is_stable() {
         let mut module = module_clone();
         module.functions[0].instructions = vec![
             Instruction::Add { dest: 2, lhs: Value::Arg(1), rhs: Value::Const(0) },
@@ -270,7 +257,7 @@ mod tests {
             Instruction::Return(Value::Local(4)),
         ];
         let ctx = PassContext { profile: None };
-        let mut pass = AlgebraicSimplification;
+        let mut pass = StrengthReduction;
         let first = pass.run(&mut module, &ctx).unwrap();
         assert!(!first.changed);
         assert!(module.functions[0].instructions.iter().any(|i| matches!(i, Instruction::Add { .. })));

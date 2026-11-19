@@ -61,6 +61,12 @@ impl WorkloadProfile {
         })
     }
 
+    pub fn sample_total(&self) -> u64 {
+        self.profile.function_counts.values().copied().sum::<u64>()
+            + self.profile.branch_counts.values().map(|(a, b)| a + b).sum::<u64>()
+            + self.profile.loop_counts.values().copied().sum::<u64>()
+    }
+
     pub fn render(&self, format: ProfileFormat) -> Result<String, String> {
         match format {
             ProfileFormat::Text => Ok(self.profile.to_text()),

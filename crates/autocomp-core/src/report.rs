@@ -158,6 +158,18 @@ pub fn render_html(title: &str, result: &CompileResult, profile: Option<&Profile
         "<h2>性能摘要</h2><div class=\"panel\"><span class=\"metric\">决策 {}</span><span class=\"metric\">指令 {}</span><span class=\"metric\">Profile {} / 热点 {}</span><span class=\"metric gain\">基线模式</span></div>",
         result.decisions.len(), result.features.instruction_count, profile_beats, profile_hot
     ));
+    let coverage_section = profile.map(|p| {
+        let total = p.function_counts.values().copied().sum::<u64>();
+        let top = crate::analysis::ranked_profile_entries(&p.function_counts, 3);
+        if top.is_empty() {
+            return String::new();
+        }
+        let rows = top.into_iter().map(|(name, count)| {
+            let share = if total == 0 { 0.0 } else { count as f64 * 100.0 / total as f64 };
+            format!("<tr><td>{}</td><td>{}</td><td>{:.1}%</td></tr>", escape(&name), count, share)
+        }).collect::<Vec<_>>().join("");
+        format!("<h2>热点分布</h2><table><thead><tr><th>函数</th><th>采样</th><th>占比</th></tr></thead><tbody>{rows}</tbody></table>")
+    }).unwrap_or_default();
     let profile_note = profile.map(|p| {
         let samples = p.function_counts.values().copied().sum::<u64>()
             + p.branch_counts.values().map(|(a, b)| a + b).sum::<u64>()
@@ -170,8 +182,8 @@ pub fn render_html(title: &str, result: &CompileResult, profile: Option<&Profile
         format!("<h2>热点函数</h2><table><thead><tr><th>函数</th><th>采样数</th></tr></thead><tbody>{hot_rows}</tbody></table>")
     };
 
-    format!(
-        "<!doctype html>\n<html lang=\"zh-CN\">\n<head>\n<meta charset=\"utf-8\">\n<title>{}</title>\n<style>\nbody{{font-family:system-ui,sans-serif;margin:2rem;color:#1f2937}}\nh1{{color:#2563eb}}\ncode{{background:#f3f4f6;padding:.15rem .35rem;border-radius:4px}}\nli{{margin:.35rem 0}}\ntable{{border-collapse:collapse;margin-top:.5rem}}td,th{{border:1px solid #d1d5db;padding:.4rem .7rem;text-align:left}}\n.panel{{background:#f8fafc;border-left:4px solid #2563eb;padding:.8rem 1rem;margin:1rem 0;display:flex;gap:1.2rem;flex-wrap:wrap;align-items:center}}\n.metric{{font-weight:600;color:#0f172a}}\n.gain{{color:#047857;background:#d1fae5;border-radius:999px;padding:.2rem .6rem;font-size:.9rem}}\n</style>\n</head>\n<body>\n<h1>{}</h1>\n<div class=\"panel\">函数 {} · 指令 {} · 调用 {} · 常量 {}</div>\n<h2>产物</h2><ul>{}</ul>\n<h2>优化决策</h2><ol>{}</ol>\n{}\n{}\n{}\n{}\n{}\n</body>\n</html>\n",
+    let html = format!(
+        "<!doctype html>\n<html lang=\"zh-CN\">\n<head>\n<meta charset=\"utf-8\">\n<title>{}</title>\n<style>\nbody{{font-family:system-ui,sans-serif;margin:2rem;color:#1f2937}}\nh1{{color:#2563eb}}\ncode{{background:#f3f4f6;padding:.15rem .35rem;border-radius:4px}}\nli{{margin:.35rem 0}}\ntable{{border-collapse:collapse;margin-top:.5rem}}td,th{{border:1px solid #d1d5db;padding:.4rem .7rem;text-align:left}}\n.panel{{background:#f8fafc;border-left:4px solid #2563eb;padding:.8rem 1rem;margin:1rem 0;display:flex;gap:1.2rem;flex-wrap:wrap;align-items:center}}\n.metric{{font-weight:600;color:#0f172a}}\n.gain{{color:#047857;background:#d1fae5;border-radius:999px;padding:.2rem .6rem;font-size:.9rem}}\n.muted{{color:#64748b;font-size:.9rem}}\n</style>\n</head>\n<body>\n<h1>{}</h1>\n<div class=\"panel\">函数 {} · 指令 {} · 调用 {} · 常量 {}</div>\n<h2>产物</h2><ul>{}</ul>\n<h2>优化决策</h2><ol>{}</ol>\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n</body>\n</html>\n",
         escape(title),
         escape(title),
         result.features.function_count,
@@ -186,7 +198,9 @@ pub fn render_html(title: &str, result: &CompileResult, profile: Option<&Profile
         hot_section,
         branch_section,
         loop_section,
-    )
+        coverage_section,
+    );
+    html
 }
 
 #[cfg(test)]

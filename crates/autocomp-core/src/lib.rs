@@ -125,8 +125,22 @@ impl AutoCompiler {
         let mut decisions = self.run_passes(&mut module, None)?;
         let object = write_object(source, &module, options)?;
         decisions.insert(0, format!("backend: emitted {}", object.file_name().and_then(|v| v.to_str()).unwrap_or("object")));
+        let mut products = vec![object];
+        if options.instrument {
+            let profile_sidecar = source.with_extension("instr.txt");
+            let mut lines = vec![format!("; AUTOCOMP instrumentation for {}", module.name)];
+            for function in &module.functions {
+                lines.push(format!("; function {} id={} args={}", function.name, function.id, function.args.len()));
+                for instruction in &function.instructions {
+                    lines.push(format!("{:?}", instruction));
+                }
+            }
+            std::fs::write(&profile_sidecar, lines.join("\n") + "\n")
+                .map_err(|e| format!("cannot write {}: {e}", profile_sidecar.display()))?;
+            products.push(profile_sidecar);
+        }
         Ok(CompileResult {
-            products: vec![object],
+            products,
             features: FeatureSet::from_module(&module),
             decisions,
         })
@@ -165,7 +179,7 @@ impl AutoCompiler {
         let instrumented = self.compile(source, &instrument_options)?;
         let profile = WorkloadProfile::from_workload(workload, &instrumented)?;
         let mut result = self.compile_with_pgo(source, &profile.profile, options)?;
-        result.products.extend(instrumented.products);
+        result.products.extend(instrumented.products.into_iter().filter(|p| p.extension().and_then(|e| e.to_str()) != Some("txt")));
         result.decisions.insert(
             0,
             format!(

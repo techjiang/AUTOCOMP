@@ -19,6 +19,7 @@ fn main() -> Result<(), String> {
   --no-run         skip running the generated demo binary
   --baseline       compare optimized result with a plain build in report
   --format=json    emit JSON report instead of HTML
+  --input=<file>   workload stdin fixture path
   ");
             Ok(())
         }
@@ -103,9 +104,13 @@ fn auto_pgo(args: &[String]) -> Result<(), String> {
     let profile_path = option_value(args, "--output=").map(PathBuf::from)
         .unwrap_or_else(|| source.with_extension("autoprof.txt"));
     fs::write(&profile_path, collected.render(ProfileFormat::Text)?).map_err(|e| e.to_string())?;
-    println!("profile written to {} ({} samples)", profile_path.display(), collected.sample_count);
+    println!("profile written to {} ({} workload samples / {} profile samples)", profile_path.display(), collected.sample_count, collected.sample_total());
     let result = compiler.compile_with_pgo(&source, &collected.profile, &options)?;
     print_result("auto-pgo", &result);
+    println!("  [profile] workload={} total={} functions={} branches={} loops={}",
+        collected.sample_count, collected.sample_total(), collected.profile.function_counts.len(),
+        collected.profile.branch_counts.len(), collected.profile.loop_counts.len());
+    println!("  [summary] instrumented decisions {} -> optimized decisions {}", instrumented.decisions.len(), result.decisions.len());
     if !args.iter().any(|a| a == "--no-run") {
         if let Some(program) = instrumented.products.iter().find(|p| p.extension().and_then(|e| e.to_str()) == Some("bin")) {
             run_workload(program, &workload)?;

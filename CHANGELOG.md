@@ -16,3 +16,7 @@
 - `optimize --output` 可指定自动 PGO 的 Profile 输出路径
 - JSON 报告新增 `samples` 字段；空 Profile 的 HTML 报告会提示回退到静态启发式
 - 修复代数化简在变量加零场景下反复重写指令、DCE 可能误删指令的问题
+- 强度化简收敛于常量乘零，避免变量表达式被错误折叠
+- 自动 PGO 输出 workload/Profile 采样数与三类 Profile 覆盖统计
+- 热点函数排序抽成公共函数，统一 Pass 与报告排序口径
+- 插桩编译写出 `*.instr.txt` 边车文件，修复自动 PGO 无采样输入的问题
