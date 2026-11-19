@@ -9,6 +9,8 @@ pub enum ProfileFormat {
 pub struct WorkloadProfile {
     pub profile: Profile,
     pub sample_count: u64,
+    pub branches: Vec<String>,
+    pub loops: Vec<String>,
     pub artifacts: Vec<PathBuf>,
 }
 
@@ -54,9 +56,13 @@ impl WorkloadProfile {
         if sample_count == 0 {
             return Err("instrumented build produced no profile samples".into());
         }
+        let branches = profile.branch_counts.keys().cloned().collect();
+        let loops = profile.loop_counts.keys().cloned().collect();
         Ok(Self {
             profile,
             sample_count,
+            branches,
+            loops,
             artifacts: instrumented.products.clone(),
         })
     }

@@ -23,6 +23,7 @@ fn main() -> Result<(), String> {
   --verify         include reproducible verification in report
   --strict-verify  treat skipped verification checks as failures
   --input=<file>   workload stdin fixture path
+  --strict-check   fail compilation when verification skips occur
   ");
             Ok(())
         }
@@ -127,6 +128,9 @@ fn auto_pgo(args: &[String]) -> Result<(), String> {
         .unwrap_or_else(|| source.with_extension("autoprof.txt"));
     fs::write(&profile_path, collected.render(ProfileFormat::Text)?).map_err(|e| e.to_string())?;
     println!("profile written to {} ({} workload samples / {} profile samples)", profile_path.display(), collected.sample_count, collected.sample_total());
+    println!("  [coverage] branches={} {} loops={} {}",
+        collected.branches.len(), collected.branches.join(", "),
+        collected.loops.len(), collected.loops.join(", "));
     let result = compiler.compile_with_pgo(&source, &collected.profile, &options)?;
     print_result("auto-pgo", &result);
     println!("  [profile] workload={} total={} functions={} branches={} loops={}",
@@ -185,8 +189,9 @@ fn verify(args: &[String]) -> Result<(), String> {
     println!("verification written to {} ({} pass / {} skip / {} fail)",
         output.display(), report.passed_count(), report.skipped_count(),
         report.checks.len() - report.passed_count() - report.skipped_count());
-    if args.iter().any(|a| a == "--strict-verify") && report.skipped_count() > 0 {
-        return Err("verification contains skipped checks under --strict-verify".into());
+    if (args.iter().any(|a| a == "--strict-verify") || args.iter().any(|a| a == "--strict-check"))
+        && report.skipped_count() > 0 {
+        return Err("verification contains skipped checks under strict mode".into());
     }
     if !report.all_passed() {
         return Err(format!("verification failed: {} check(s) did not pass", report.checks.len() - report.passed_count() - report.skipped_count()));

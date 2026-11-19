@@ -46,5 +46,7 @@ cargo run -p autocomp-cli -- report demo.ac --pgo=demo.autoprof.txt --baseline -
 - `report --verify` 会把验证清单直接嵌入 HTML/JSON 报告
 - 验证清单区分 PASS / SKIP / FAIL，HTML 颜色标识，`--strict-verify` 可将 SKIP 视为失败
 - 多 Profile 合并会统计采样数、重叠项和函数/分支/循环分布，并写入 HTML/JSON 报告
+- 代数化简 Pass 会处理加零/减零恒等式，自动 PGO 输出分支与循环覆盖明细
+- `verify --strict-check` 可把跳过的验证项视为失败，便于严格 CI 门禁
 
 同一个世界，同一个互联网！

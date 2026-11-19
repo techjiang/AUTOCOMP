@@ -108,6 +108,40 @@ fn collect_value_ids(value: &Value, used: &mut std::collections::HashSet<Id>) {
     }
 }
 
+pub struct AlgebraicSimplification;
+
+impl OptimizationPass for AlgebraicSimplification {
+    fn name(&self) -> &str { "algebraic-simplification" }
+
+    fn run(&mut self, module: &mut Module, _ctx: &PassContext) -> Result<PassResult, String> {
+        let mut simplified = 0;
+        for func in &mut module.functions {
+            for inst in &mut func.instructions {
+                let replacement = match inst {
+                    Instruction::Add { dest, lhs: Value::Arg(id), rhs: Value::Const(0) }
+                    | Instruction::Add { dest, lhs: Value::Const(0), rhs: Value::Arg(id) } => {
+                        Some(Instruction::Const { dest: *dest, value: 0 })
+                    }
+                    Instruction::Sub { dest, lhs: Value::Arg(id), rhs: Value::Const(0) } => {
+                        Some(Instruction::Const { dest: *dest, value: 0 })
+                    }
+                    _ => None,
+                };
+                if let Some(new_inst) = replacement {
+                    if &new_inst != inst {
+                        *inst = new_inst;
+                        simplified += 1;
+                    }
+                }
+            }
+        }
+        Ok(PassResult {
+            changed: simplified > 0,
+            note: format!("simplify {simplified} algebraic identities"),
+        })
+    }
+}
+
 pub struct StrengthReduction;
 
 impl OptimizationPass for StrengthReduction {
@@ -308,6 +342,7 @@ pub fn default_passes() -> Vec<Box<dyn OptimizationPass>> {
     vec![
         Box::new(ConstantFolding),
         Box::new(CopyPropagation),
+        Box::new(AlgebraicSimplification),
         Box::new(StrengthReduction),
         Box::new(DeadCodeElimination),
         Box::new(InlineHint),
@@ -320,6 +355,20 @@ pub fn default_passes() -> Vec<Box<dyn OptimizationPass>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn algebraic_simplification_reports_rewrite() {
+        let mut module = module_clone();
+        module.functions[0].instructions = vec![
+            Instruction::Add { dest: 2, lhs: Value::Arg(1), rhs: Value::Const(0) },
+            Instruction::Return(Value::Local(2)),
+        ];
+        let ctx = PassContext { profile: None };
+        let mut pass = AlgebraicSimplification;
+        let result = pass.run(&mut module, &ctx).unwrap();
+        assert!(result.changed);
+        assert_eq!(module.functions[0].instructions[0], Instruction::Const { dest: 2, value: 0 });
+    }
 
     #[test]
     fn strength_reduction_runs() {
