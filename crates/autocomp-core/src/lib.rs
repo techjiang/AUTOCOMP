@@ -33,6 +33,21 @@ pub struct VerifyCheck {
     pub name: String,
     pub passed: bool,
     pub detail: String,
+    pub skipped: Option<String>,
+}
+
+impl VerifyCheck {
+    pub fn pass(name: impl Into<String>, detail: impl Into<String>) -> Self {
+        Self { name: name.into(), passed: true, detail: detail.into(), skipped: None }
+    }
+
+    pub fn fail(name: impl Into<String>, detail: impl Into<String>) -> Self {
+        Self { name: name.into(), passed: false, detail: detail.into(), skipped: None }
+    }
+
+    pub fn skip(name: impl Into<String>, reason: impl Into<String>, detail: impl Into<String>) -> Self {
+        Self { name: name.into(), passed: false, detail: detail.into(), skipped: Some(reason.into()) }
+    }
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -42,17 +57,27 @@ pub struct VerifyReport {
 
 impl VerifyReport {
     pub fn all_passed(&self) -> bool {
-        self.checks.iter().all(|check| check.passed)
+        self.checks.iter().all(|check| check.passed || check.skipped.is_some())
     }
 
     pub fn passed_count(&self) -> usize {
         self.checks.iter().filter(|check| check.passed).count()
     }
 
+    pub fn skipped_count(&self) -> usize {
+        self.checks.iter().filter(|check| check.skipped.is_some()).count()
+    }
+
     pub fn to_text(&self) -> String {
         let mut lines = vec!["# AUTOCOMP verification".to_string()];
         for check in &self.checks {
-            let status = if check.passed { "PASS" } else { "FAIL" };
+            let status = if let Some(reason) = &check.skipped {
+                format!("SKIP[{reason}]")
+            } else if check.passed {
+                "PASS".into()
+            } else {
+                "FAIL".into()
+            };
             lines.push(format!("{status} {}: {}", check.name, check.detail));
         }
         lines.join("\n") + "\n"
@@ -231,17 +256,23 @@ impl AutoCompiler {
         output: &Path,
     ) -> Result<VerifyReport, String> {
         let mut checks = Vec::new();
+        let cargo_available = std::process::Command::new("cargo")
+            .arg("--version")
+            .output()
+            .map(|output| output.status.success())
+            .unwrap_or(false);
+        let rust_toolchain = cargo_available && std::process::Command::new("rustc")
+            .arg("--version")
+            .output()
+            .map(|output| output.status.success())
+            .unwrap_or(false);
 
         let module = Module::from_source(source)?;
         let verify = module.verify();
-        checks.push(VerifyCheck {
-            name: "ir-verify".into(),
-            passed: verify.is_valid(),
-            detail: if verify.is_valid() {
-                format!("{} functions parsed with no errors", module.functions.len())
-            } else {
-                verify.errors.join("; ")
-            },
+        checks.push(if verify.is_valid() {
+            VerifyCheck::pass("ir-verify", format!("{} functions parsed with no errors", module.functions.len()))
+        } else {
+            VerifyCheck::fail("ir-verify", verify.errors.join("; "))
         });
 
         let profile_text = profile.to_text();
@@ -249,27 +280,31 @@ impl AutoCompiler {
         let sample_total = profile.function_counts.values().copied().sum::<u64>()
             + profile.branch_counts.values().map(|(a, b)| a + b).sum::<u64>()
             + profile.loop_counts.values().copied().sum::<u64>();
-        checks.push(VerifyCheck {
-            name: "profile-merge".into(),
-            passed: sample_total > 0 && merged.to_text() == profile.to_text(),
-            detail: format!("{sample_total} samples round-tripped"),
+        checks.push(if sample_total > 0 && merged.to_text() == profile.to_text() {
+            VerifyCheck::pass("profile-merge", format!("{sample_total} samples round-tripped"))
+        } else {
+            VerifyCheck::fail("profile-merge", format!("{sample_total} samples failed round-trip"))
         });
 
         let result = self.compile_auto_pgo(source, workload, &CompileOptions::default())?;
         let has_auto_pgo = result.decisions.iter().any(|d| d.starts_with("auto-pgo:"));
         let optimized = result.decisions.iter().any(|d| d.starts_with("backend: emitted optimized"));
-        checks.push(VerifyCheck {
-            name: "auto-pgo".into(),
-            passed: has_auto_pgo && optimized,
-            detail: format!("{} decisions emitted", result.decisions.len()),
+        checks.push(if rust_toolchain {
+            if has_auto_pgo && optimized {
+                VerifyCheck::pass("auto-pgo", format!("{} decisions emitted", result.decisions.len()))
+            } else {
+                VerifyCheck::fail("auto-pgo", format!("{} decisions emitted without a complete PGO chain", result.decisions.len()))
+            }
+        } else {
+            VerifyCheck::skip("auto-pgo", "runtime-demo", format!("{} decisions emitted; host binary execution not verified", result.decisions.len()))
         });
 
         fs::write(output, self.render_verify_text(&checks))
             .map_err(|e| format!("cannot write {}: {e}", output.display()))?;
-        checks.push(VerifyCheck {
-            name: "report-snapshot".into(),
-            passed: Path::new(output).exists(),
-            detail: format!("wrote {}", output.display()),
+        checks.push(if Path::new(output).exists() {
+            VerifyCheck::pass("report-snapshot", format!("wrote {}", output.display()))
+        } else {
+            VerifyCheck::fail("report-snapshot", format!("missing {}", output.display()))
         });
         Ok(VerifyReport { checks })
     }
@@ -391,6 +426,18 @@ mod tests {
         assert_eq!(merged.loop_counts["const-0"], 10);
         let restored = Profile::from_text(&merged.to_text()).unwrap();
         assert_eq!(restored.to_text(), merged.to_text());
+    }
+
+    #[test]
+    fn verify_check_status_helpers() {
+        let pass = VerifyCheck::pass("a", "ok");
+        let skip = VerifyCheck::skip("b", "toolchain", "not run");
+        let fail = VerifyCheck::fail("c", "broken");
+        let report = VerifyReport { checks: vec![pass, skip, fail] };
+        assert_eq!(report.passed_count(), 1);
+        assert_eq!(report.skipped_count(), 1);
+        assert!(!report.all_passed());
+        assert!(report.to_text().contains("SKIP[toolchain]"));
     }
 
     #[test]

@@ -64,7 +64,16 @@ pub fn render_json(title: &str, result: &CompileResult, profile: Option<&Profile
         "{{\"passed\":{},\"count\":{},\"checks\":[{}]}}",
         if v.all_passed() { "true" } else { "false" },
         v.checks.len(),
-        v.checks.iter().map(|c| format!("{{\"name\":\"{}\",\"passed\":{},\"detail\":\"{}\"}}", escape(&c.name), if c.passed { "true" } else { "false" }, escape(&c.detail))).collect::<Vec<_>>().join(",")
+        v.checks.iter().map(|c| {
+            let status = if let Some(skip) = &c.skipped {
+                format!("SKIP:{}", skip)
+            } else if c.passed {
+                "PASS".into()
+            } else {
+                "FAIL".into()
+            };
+            format!("{{\"name\":\"{}\",\"passed\":{},\"status\":\"{}\",\"detail\":\"{}\"}}", escape(&c.name), if c.passed { "true" } else { "false" }, status, escape(&c.detail))
+        }).collect::<Vec<_>>().join(",")
     )).unwrap_or_else(|| "null".into());
     let profile_json = profile.map(|p| format!(
         "{{\"functions\":{},\"branches\":{},\"loops\":{},\"samples\":{},\"mix_score\":{:.2},\"hot\":[{}]}}",
@@ -184,11 +193,20 @@ pub fn render_html(title: &str, result: &CompileResult, profile: Option<&Profile
     }).unwrap_or_default();
     let verify_section = verify.map(|v| {
         let rows = v.checks.iter().map(|c| {
-            let status = if c.passed { "PASS" } else { "FAIL" };
-            format!("<tr><td>{}</td><td>{}</td><td>{}</td></tr>", status, escape(&c.name), escape(&c.detail))
+            let (status, cls) = if let Some(reason) = &c.skipped {
+                (format!("SKIP · {}", escape(reason)), "skip")
+            } else if c.passed {
+                ("PASS".into(), "pass")
+            } else {
+                ("FAIL".into(), "fail")
+            };
+            format!("<tr><td class=\"{cls}\">{}</td><td>{}</td><td>{}</td></tr>", status, escape(&c.name), escape(&c.detail))
         }).collect::<Vec<_>>().join("");
-        let summary = format!("{} / {} passed", v.passed_count(), v.checks.len());
-        format!("<h2>验证清单</h2><div class=\"panel\"><span class=\"metric\">{}</span></div><table><thead><tr><th>状态</th><th>项目</th><th>说明</th></tr></thead><tbody>{}</tbody></table>", summary, rows)
+        let passed = v.passed_count();
+        let skipped = v.skipped_count();
+        let failed = v.checks.len() - passed - skipped;
+        let summary = format!("{} pass / {} skip / {} fail", passed, skipped, failed);
+        format!("<h2>验证清单</h2><div class=\"panel\"><span class=\"metric\">{}</span></div><table class=\"checks\"><thead><tr><th>状态</th><th>项目</th><th>说明</th></tr></thead><tbody>{}</tbody></table>", summary, rows)
     }).unwrap_or_default();
     let hot_section = if hot_rows.is_empty() {
         String::new()
@@ -197,7 +215,7 @@ pub fn render_html(title: &str, result: &CompileResult, profile: Option<&Profile
     };
 
     let html = format!(
-        "<!doctype html>\n<html lang=\"zh-CN\">\n<head>\n<meta charset=\"utf-8\">\n<title>{}</title>\n<style>\nbody{{font-family:system-ui,sans-serif;margin:2rem;color:#1f2937}}\nh1{{color:#2563eb}}\ncode{{background:#f3f4f6;padding:.15rem .35rem;border-radius:4px}}\nli{{margin:.35rem 0}}\ntable{{border-collapse:collapse;margin-top:.5rem}}td,th{{border:1px solid #d1d5db;padding:.4rem .7rem;text-align:left}}\n.panel{{background:#f8fafc;border-left:4px solid #2563eb;padding:.8rem 1rem;margin:1rem 0;display:flex;gap:1.2rem;flex-wrap:wrap;align-items:center}}\n.metric{{font-weight:600;color:#0f172a}}\n.gain{{color:#047857;background:#d1fae5;border-radius:999px;padding:.2rem .6rem;font-size:.9rem}}\n.muted{{color:#64748b;font-size:.9rem}}\n</style>\n</head>\n<body>\n<h1>{}</h1>\n<div class=\"panel\">函数 {} · 指令 {} · 调用 {} · 常量 {}</div>\n<h2>产物</h2><ul>{}</ul>\n<h2>优化决策</h2><ol>{}</ol>\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n</body>\n</html>\n",
+        "<!doctype html>\n<html lang=\"zh-CN\">\n<head>\n<meta charset=\"utf-8\">\n<title>{}</title>\n<style>\nbody{{font-family:system-ui,sans-serif;margin:2rem;color:#1f2937}}\nh1{{color:#2563eb}}\ncode{{background:#f3f4f6;padding:.15rem .35rem;border-radius:4px}}\nli{{margin:.35rem 0}}\ntable{{border-collapse:collapse;margin-top:.5rem}}td,th{{border:1px solid #d1d5db;padding:.4rem .7rem;text-align:left}}\n.panel{{background:#f8fafc;border-left:4px solid #2563eb;padding:.8rem 1rem;margin:1rem 0;display:flex;gap:1.2rem;flex-wrap:wrap;align-items:center}}\n.metric{{font-weight:600;color:#0f172a}}\n.gain{{color:#047857;background:#d1fae5;border-radius:999px;padding:.2rem .6rem;font-size:.9rem}}\n.muted{{color:#64748b;font-size:.9rem}}\n.checks td:first-child{{font-weight:700}}\n.checks .pass{{color:#047857;background:#d1fae5}}\n.checks .fail{{color:#b91c1c;background:#fee2e2}}\n.checks .skip{{color:#b45309;background:#fef3c7}}\n</style>\n</head>\n<body>\n<h1>{}</h1>\n<div class=\"panel\">函数 {} · 指令 {} · 调用 {} · 常量 {}</div>\n<h2>产物</h2><ul>{}</ul>\n<h2>优化决策</h2><ol>{}</ol>\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n</body>\n</html>\n",
         escape(title),
         escape(title),
         result.features.function_count,
@@ -370,6 +388,7 @@ mod verify_tests {
                 name: "ir-verify".into(),
                 passed: true,
                 detail: "1 functions parsed".into(),
+                skipped: None,
             }],
         };
         let result = crate::CompileResult {
@@ -379,7 +398,7 @@ mod verify_tests {
         };
         let html = render_html("Verify", &result, Some(&profile), None, Some(&verify));
         assert!(html.contains("验证清单"));
-        assert!(html.contains("1 / 1 passed"));
+        assert!(html.contains("1 pass / 0 skip / 0 fail"));
         let json = render_json("Verify", &result, Some(&profile), None, Some(&verify));
         assert!(json.contains("\"verify\""));
     }

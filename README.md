@@ -16,6 +16,7 @@ cargo run -p autocomp-cli -- report demo.ac --pgo=autoprof.txt --baseline --form
 cargo run -p autocomp-cli -- cc demo.ac --pgo=autoprof.txt --pgo=extra.autoprof.txt
 cargo run -p autocomp-cli -- optimize demo.ac --workload='demo --quick' --output=demo.autoprof.txt
 cargo run -p autocomp-cli -- verify demo.ac --pgo=demo.autoprof.txt --output=demo.verify.txt
+cargo run -p autocomp-cli -- verify demo.ac --pgo=demo.autoprof.txt --strict-verify
 cargo run -p autocomp-cli -- report demo.ac --pgo=demo.autoprof.txt --baseline --verify --output=demo.report.html
 ```
 
@@ -43,5 +44,6 @@ cargo run -p autocomp-cli -- report demo.ac --pgo=demo.autoprof.txt --baseline -
 - 插桩编译会额外写出 `*.instr.txt` 采样边车文件，供 Profile 收集读取
 - `verify` 会把 IR 校验、Profile 合并、自动 PGO 和报告快照写成可追踪清单
 - `report --verify` 会把验证清单直接嵌入 HTML/JSON 报告
+- 验证清单区分 PASS / SKIP / FAIL，HTML 颜色标识，`--strict-verify` 可将 SKIP 视为失败
 
 同一个世界，同一个互联网！

@@ -21,6 +21,7 @@ fn main() -> Result<(), String> {
   --baseline       compare optimized result with a plain build in report
   --format=json    emit JSON report instead of HTML
   --verify         include reproducible verification in report
+  --strict-verify  treat skipped verification checks as failures
   --input=<file>   workload stdin fixture path
   ");
             Ok(())
@@ -153,10 +154,24 @@ fn verify(args: &[String]) -> Result<(), String> {
     let mut compiler = AutoCompiler::default();
     let report: VerifyReport = compiler.verify(&source, &workload, &profile, &output)?;
     for check in &report.checks {
-        let status = if check.passed { "PASS" } else { "FAIL" };
+        let status = if let Some(reason) = &check.skipped {
+            format!("SKIP[{reason}]")
+        } else if check.passed {
+            "PASS".into()
+        } else {
+            "FAIL".into()
+        };
         println!("[{status}] {}: {}", check.name, check.detail);
     }
-    println!("verification written to {} ({} / {} passed)", output.display(), report.passed_count(), report.checks.len());
+    println!("verification written to {} ({} pass / {} skip / {} fail)",
+        output.display(), report.passed_count(), report.skipped_count(),
+        report.checks.len() - report.passed_count() - report.skipped_count());
+    if args.iter().any(|a| a == "--strict-verify") && report.skipped_count() > 0 {
+        return Err("verification contains skipped checks under --strict-verify".into());
+    }
+    if !report.all_passed() {
+        return Err(format!("verification failed: {} check(s) did not pass", report.checks.len() - report.passed_count() - report.skipped_count()));
+    }
     Ok(())
 }
 

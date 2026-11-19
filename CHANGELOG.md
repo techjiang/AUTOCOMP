@@ -23,3 +23,4 @@
 - 新增复制传播 Pass，常量别名在使用点替换后可继续折叠
 - 新增调用图内联提示 Pass，按 Profile 热度排序候选调用边
 - `verify` 输出可追踪验证清单，报告可通过 `--verify` 内嵌验证结果
+- 验证清单区分 PASS / SKIP / FAIL，新增 `--strict-verify` 严格模式
