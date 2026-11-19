@@ -100,7 +100,8 @@ fn auto_pgo(args: &[String]) -> Result<(), String> {
     let instrumented = compiler.compile(&source, &instrument_options)?;
     print_result("instrumented", &instrumented);
     let collected = autocomp_core::WorkloadProfile::from_workload(&workload, &instrumented)?;
-    let profile_path = source.with_extension("autoprof.txt");
+    let profile_path = option_value(args, "--output=").map(PathBuf::from)
+        .unwrap_or_else(|| source.with_extension("autoprof.txt"));
     fs::write(&profile_path, collected.render(ProfileFormat::Text)?).map_err(|e| e.to_string())?;
     println!("profile written to {} ({} samples)", profile_path.display(), collected.sample_count);
     let result = compiler.compile_with_pgo(&source, &collected.profile, &options)?;

@@ -118,35 +118,20 @@ impl OptimizationPass for AlgebraicSimplification {
         for func in &mut module.functions {
             for inst in &mut func.instructions {
                 let replacement = match inst {
-                    Instruction::Add { dest, lhs: Value::Const(0), rhs } => {
-                        Some(match rhs {
-                            Value::Const(value) => Instruction::Const { dest: *dest, value: *value },
-                            _ => Instruction::Add { dest: *dest, lhs: rhs.clone(), rhs: Value::Const(0) },
-                        })
+                    Instruction::Add { dest, lhs: Value::Const(0), rhs: Value::Const(value) } => {
+                        Some(Instruction::Const { dest: *dest, value: *value })
                     }
-                    Instruction::Add { dest, lhs, rhs: Value::Const(0) } => {
-                        Some(match lhs {
-                            Value::Const(value) => Instruction::Const { dest: *dest, value: *value },
-                            _ => Instruction::Add { dest: *dest, lhs: lhs.clone(), rhs: Value::Const(0) },
-                        })
+                    Instruction::Add { dest, lhs: Value::Const(value), rhs: Value::Const(0) } => {
+                        Some(Instruction::Const { dest: *dest, value: *value })
                     }
-                    Instruction::Sub { dest, lhs, rhs: Value::Const(0) } => {
-                        Some(match lhs {
-                            Value::Const(value) => Instruction::Const { dest: *dest, value: *value },
-                            _ => Instruction::Sub { dest: *dest, lhs: lhs.clone(), rhs: Value::Const(0) },
-                        })
+                    Instruction::Sub { dest, lhs: Value::Const(value), rhs: Value::Const(0) } => {
+                        Some(Instruction::Const { dest: *dest, value: *value })
                     }
-                    Instruction::Mul { dest, lhs: Value::Const(1), rhs } => {
-                        Some(match rhs {
-                            Value::Const(value) => Instruction::Const { dest: *dest, value: *value },
-                            _ => Instruction::Mul { dest: *dest, lhs: rhs.clone(), rhs: Value::Const(1) },
-                        })
+                    Instruction::Mul { dest, lhs: Value::Const(1), rhs: Value::Const(value) } => {
+                        Some(Instruction::Const { dest: *dest, value: *value })
                     }
-                    Instruction::Mul { dest, lhs, rhs: Value::Const(1) } => {
-                        Some(match lhs {
-                            Value::Const(value) => Instruction::Const { dest: *dest, value: *value },
-                            _ => Instruction::Mul { dest: *dest, lhs: lhs.clone(), rhs: Value::Const(1) },
-                        })
+                    Instruction::Mul { dest, lhs: Value::Const(value), rhs: Value::Const(1) } => {
+                        Some(Instruction::Const { dest: *dest, value: *value })
                     }
                     Instruction::Mul { dest, lhs: Value::Const(0), .. }
                     | Instruction::Mul { dest, rhs: Value::Const(0), .. } => {
@@ -273,6 +258,41 @@ mod tests {
         let ctx = PassContext { profile: None };
         let mut pass = AlgebraicSimplification;
         assert!(!pass.run(&mut module, &ctx).unwrap().changed);
+    }
+
+    #[test]
+    fn algebraic_simplification_is_stable() {
+        let mut module = module_clone();
+        module.functions[0].instructions = vec![
+            Instruction::Add { dest: 2, lhs: Value::Arg(1), rhs: Value::Const(0) },
+            Instruction::Sub { dest: 3, lhs: Value::Arg(1), rhs: Value::Const(0) },
+            Instruction::Mul { dest: 4, lhs: Value::Arg(1), rhs: Value::Const(1) },
+            Instruction::Return(Value::Local(4)),
+        ];
+        let ctx = PassContext { profile: None };
+        let mut pass = AlgebraicSimplification;
+        let first = pass.run(&mut module, &ctx).unwrap();
+        assert!(!first.changed);
+        assert!(module.functions[0].instructions.iter().any(|i| matches!(i, Instruction::Add { .. })));
+    }
+
+    #[test]
+    fn dce_keeps_instructions_needed_by_return() {
+        let mut module = Module::default();
+        module.functions.push(crate::ir::Function {
+            id: 1,
+            name: "f".into(),
+            args: vec![],
+            instructions: vec![
+                Instruction::Const { dest: 1, value: 2 },
+                Instruction::Add { dest: 2, lhs: Value::Local(1), rhs: Value::Const(3) },
+                Instruction::Return(Value::Local(2)),
+            ],
+        });
+        let ctx = PassContext { profile: None };
+        let mut pass = DeadCodeElimination;
+        assert!(!pass.run(&mut module, &ctx).unwrap().changed);
+        assert_eq!(module.functions[0].instructions.len(), 3);
     }
 
     #[test]

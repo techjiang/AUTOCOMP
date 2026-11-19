@@ -61,8 +61,12 @@ pub fn render_json(title: &str, result: &CompileResult, profile: Option<&Profile
         base.decisions.len(), base.products.len()
     )).unwrap_or_else(|| "null".into());
     let profile_json = profile.map(|p| format!(
-        "{{\"functions\":{},\"branches\":{},\"loops\":{},\"mix_score\":{:.2},\"hot\":[{}]}}",
-        p.function_counts.len(), p.branch_counts.len(), p.loop_counts.len(), profile_mix(Some(p)), hot_counts
+        "{{\"functions\":{},\"branches\":{},\"loops\":{},\"samples\":{},\"mix_score\":{:.2},\"hot\":[{}]}}",
+        p.function_counts.len(), p.branch_counts.len(), p.loop_counts.len(),
+        p.function_counts.values().copied().sum::<u64>()
+            + p.branch_counts.values().map(|(a, b)| a + b).sum::<u64>()
+            + p.loop_counts.values().copied().sum::<u64>(),
+        profile_mix(Some(p)), hot_counts
     )).unwrap_or_else(|| "null".into());
     format!(
         "{{\"title\":\"{}\",\"features\":{{\"functions\":{},\"instructions\":{},\"calls\":{},\"constants\":{}}},\"products\":{},\"decisions\":{},\"profile\":{},\"baseline\":{}}}",
@@ -154,6 +158,12 @@ pub fn render_html(title: &str, result: &CompileResult, profile: Option<&Profile
         "<h2>性能摘要</h2><div class=\"panel\"><span class=\"metric\">决策 {}</span><span class=\"metric\">指令 {}</span><span class=\"metric\">Profile {} / 热点 {}</span><span class=\"metric gain\">基线模式</span></div>",
         result.decisions.len(), result.features.instruction_count, profile_beats, profile_hot
     ));
+    let profile_note = profile.map(|p| {
+        let samples = p.function_counts.values().copied().sum::<u64>()
+            + p.branch_counts.values().map(|(a, b)| a + b).sum::<u64>()
+            + p.loop_counts.values().copied().sum::<u64>();
+        if samples > 0 { String::new() } else { "<p class=\"muted\">当前 Profile 为空，优化决策回退到静态启发式。</p>".into() }
+    }).unwrap_or_default();
     let hot_section = if hot_rows.is_empty() {
         String::new()
     } else {
@@ -161,7 +171,7 @@ pub fn render_html(title: &str, result: &CompileResult, profile: Option<&Profile
     };
 
     format!(
-        "<!doctype html>\n<html lang=\"zh-CN\">\n<head>\n<meta charset=\"utf-8\">\n<title>{}</title>\n<style>\nbody{{font-family:system-ui,sans-serif;margin:2rem;color:#1f2937}}\nh1{{color:#2563eb}}\ncode{{background:#f3f4f6;padding:.15rem .35rem;border-radius:4px}}\nli{{margin:.35rem 0}}\ntable{{border-collapse:collapse;margin-top:.5rem}}td,th{{border:1px solid #d1d5db;padding:.4rem .7rem;text-align:left}}\n.panel{{background:#f8fafc;border-left:4px solid #2563eb;padding:.8rem 1rem;margin:1rem 0;display:flex;gap:1.2rem;flex-wrap:wrap;align-items:center}}\n.metric{{font-weight:600;color:#0f172a}}\n.gain{{color:#047857;background:#d1fae5;border-radius:999px;padding:.2rem .6rem;font-size:.9rem}}\n</style>\n</head>\n<body>\n<h1>{}</h1>\n<div class=\"panel\">函数 {} · 指令 {} · 调用 {} · 常量 {}</div>\n<h2>产物</h2><ul>{}</ul>\n<h2>优化决策</h2><ol>{}</ol>\n{}\n{}\n{}\n{}\n</body>\n</html>\n",
+        "<!doctype html>\n<html lang=\"zh-CN\">\n<head>\n<meta charset=\"utf-8\">\n<title>{}</title>\n<style>\nbody{{font-family:system-ui,sans-serif;margin:2rem;color:#1f2937}}\nh1{{color:#2563eb}}\ncode{{background:#f3f4f6;padding:.15rem .35rem;border-radius:4px}}\nli{{margin:.35rem 0}}\ntable{{border-collapse:collapse;margin-top:.5rem}}td,th{{border:1px solid #d1d5db;padding:.4rem .7rem;text-align:left}}\n.panel{{background:#f8fafc;border-left:4px solid #2563eb;padding:.8rem 1rem;margin:1rem 0;display:flex;gap:1.2rem;flex-wrap:wrap;align-items:center}}\n.metric{{font-weight:600;color:#0f172a}}\n.gain{{color:#047857;background:#d1fae5;border-radius:999px;padding:.2rem .6rem;font-size:.9rem}}\n</style>\n</head>\n<body>\n<h1>{}</h1>\n<div class=\"panel\">函数 {} · 指令 {} · 调用 {} · 常量 {}</div>\n<h2>产物</h2><ul>{}</ul>\n<h2>优化决策</h2><ol>{}</ol>\n{}\n{}\n{}\n{}\n{}\n</body>\n</html>\n",
         escape(title),
         escape(title),
         result.features.function_count,
@@ -172,6 +182,7 @@ pub fn render_html(title: &str, result: &CompileResult, profile: Option<&Profile
         decisions,
         perf_section,
         baseline_section,
+        profile_note,
         hot_section,
         branch_section,
         loop_section,
@@ -284,5 +295,36 @@ mod tests {
         let html = render_html("PGO Compare", &result, None, Some(&baseline));
         assert!(html.contains("PGO 对照"));
         assert!(html.contains("+1"));
+    }
+}
+
+#[cfg(test)]
+mod extra_tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    fn result() -> CompileResult {
+        CompileResult {
+            products: vec![PathBuf::from("demo.opt.o")],
+            features: crate::FeatureSet::default(),
+            decisions: vec!["pgo: loaded 1 sampled functions".into()],
+        }
+    }
+
+    #[test]
+    fn json_report_exposes_profile_samples() {
+        let mut profile = crate::Profile::default();
+        profile.function_counts.insert("main".into(), 3);
+        profile.branch_counts.insert("entry:main".into(), (1, 2));
+        profile.loop_counts.insert("const-0".into(), 4);
+        let json = render_json("AUTOCOMP", &result(), Some(&profile), None);
+        assert!(json.contains("\"samples\":10"));
+    }
+
+    #[test]
+    fn html_report_notes_empty_profile() {
+        let profile = crate::Profile::default();
+        let html = render_html("Empty PGO", &result(), Some(&profile), None);
+        assert!(html.contains("当前 Profile 为空"));
     }
 }

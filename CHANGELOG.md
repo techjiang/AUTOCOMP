@@ -13,3 +13,6 @@
 - HTML 报告性能摘要加入 Profile 覆盖、覆盖度、热点函数与启发式评分，并注明评分不是实测性能提升
 - `--pgo` 支持重复传入并合并多个 Profile，JSON 报告新增 `mix_score` 字段
 - `report --format=json` 默认写出 `*.report.json`，`cc --baseline` 输出精简对照
+- `optimize --output` 可指定自动 PGO 的 Profile 输出路径
+- JSON 报告新增 `samples` 字段；空 Profile 的 HTML 报告会提示回退到静态启发式
+- 修复代数化简在变量加零场景下反复重写指令、DCE 可能误删指令的问题
