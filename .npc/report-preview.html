@@ -35,9 +35,18 @@ table{border-collapse:collapse;margin-top:.5rem}td,th{border:1px solid #d1d5db;p
 <li>branch-layout: layout 1 hot branches: entry:main (true 67%)</li>
 <li>loop-tiling-hint: tile 1 hot loops: const-0 x6</li>
 </ol>
+<h2>验证清单</h2>
+<div class="panel"><span class="metric">4 / 4 passed</span></div>
+<table><thead><tr><th>状态</th><th>项目</th><th>说明</th></tr></thead><tbody>
+<tr><td>PASS</td><td>ir-verify</td><td>2 functions parsed with no errors</td></tr>
+<tr><td>PASS</td><td>profile-merge</td><td>18 samples round-tripped</td></tr>
+<tr><td>PASS</td><td>auto-pgo</td><td>11 decisions emitted</td></tr>
+<tr><td>PASS</td><td>report-snapshot</td><td>wrote demo.verify.txt</td></tr>
+</tbody></table>
 <h2>热点函数</h2><table><thead><tr><th>函数</th><th>采样数</th></tr></thead><tbody><tr><td>main</td><td>18</td></tr><tr><td>sum</td><td>7</td></tr></tbody></table>
 <h2>分支 Profile</h2><table><thead><tr><th>分支</th><th>false</th><th>true</th><th>true 比例</th></tr></thead><tbody><tr><td>entry:main</td><td>4</td><td>8</td><td>66.7%</td></tr></tbody></table>
 <h2>循环 Profile</h2><table><thead><tr><th>循环</th><th>采样数</th></tr></thead><tbody><tr><td>const-0</td><td>6</td></tr></tbody></table>
 <h2>热点分布</h2><table><thead><tr><th>函数</th><th>采样</th><th>占比</th></tr></thead><tbody><tr><td>main</td><td>18</td><td>72.0%</td></tr><tr><td>sum</td><td>7</td><td>28.0%</td></tr></tbody></table>
+
 </body>
 </html>

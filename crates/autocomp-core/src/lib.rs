@@ -5,6 +5,7 @@ pub mod profile;
 pub mod report;
 
 use std::collections::HashMap;
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -25,6 +26,37 @@ pub struct CompileResult {
     pub products: Vec<PathBuf>,
     pub features: FeatureSet,
     pub decisions: Vec<String>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct VerifyCheck {
+    pub name: String,
+    pub passed: bool,
+    pub detail: String,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct VerifyReport {
+    pub checks: Vec<VerifyCheck>,
+}
+
+impl VerifyReport {
+    pub fn all_passed(&self) -> bool {
+        self.checks.iter().all(|check| check.passed)
+    }
+
+    pub fn passed_count(&self) -> usize {
+        self.checks.iter().filter(|check| check.passed).count()
+    }
+
+    pub fn to_text(&self) -> String {
+        let mut lines = vec!["# AUTOCOMP verification".to_string()];
+        for check in &self.checks {
+            let status = if check.passed { "PASS" } else { "FAIL" };
+            lines.push(format!("{status} {}: {}", check.name, check.detail));
+        }
+        lines.join("\n") + "\n"
+    }
 }
 
 #[derive(Clone, Debug, Default)]
@@ -191,6 +223,61 @@ impl AutoCompiler {
         Ok(result)
     }
 
+    pub fn verify(
+        &mut self,
+        source: &Path,
+        workload: &Workload,
+        profile: &Profile,
+        output: &Path,
+    ) -> Result<VerifyReport, String> {
+        let mut checks = Vec::new();
+
+        let module = Module::from_source(source)?;
+        let verify = module.verify();
+        checks.push(VerifyCheck {
+            name: "ir-verify".into(),
+            passed: verify.is_valid(),
+            detail: if verify.is_valid() {
+                format!("{} functions parsed with no errors", module.functions.len())
+            } else {
+                verify.errors.join("; ")
+            },
+        });
+
+        let profile_text = profile.to_text();
+        let merged = Profile::from_text(&profile_text)?.merge(profile);
+        let sample_total = profile.function_counts.values().copied().sum::<u64>()
+            + profile.branch_counts.values().map(|(a, b)| a + b).sum::<u64>()
+            + profile.loop_counts.values().copied().sum::<u64>();
+        checks.push(VerifyCheck {
+            name: "profile-merge".into(),
+            passed: sample_total > 0 && merged.to_text() == profile.to_text(),
+            detail: format!("{sample_total} samples round-tripped"),
+        });
+
+        let result = self.compile_auto_pgo(source, workload, &CompileOptions::default())?;
+        let has_auto_pgo = result.decisions.iter().any(|d| d.starts_with("auto-pgo:"));
+        let optimized = result.decisions.iter().any(|d| d.starts_with("backend: emitted optimized"));
+        checks.push(VerifyCheck {
+            name: "auto-pgo".into(),
+            passed: has_auto_pgo && optimized,
+            detail: format!("{} decisions emitted", result.decisions.len()),
+        });
+
+        fs::write(output, self.render_verify_text(&checks))
+            .map_err(|e| format!("cannot write {}: {e}", output.display()))?;
+        checks.push(VerifyCheck {
+            name: "report-snapshot".into(),
+            passed: Path::new(output).exists(),
+            detail: format!("wrote {}", output.display()),
+        });
+        Ok(VerifyReport { checks })
+    }
+
+    fn render_verify_text(&self, checks: &[VerifyCheck]) -> String {
+        VerifyReport { checks: checks.to_vec() }.to_text()
+    }
+
     fn run_passes(&mut self, module: &mut Module, profile: Option<&Profile>) -> Result<Vec<String>, String> {
         let ctx = PassContext { profile };
         let mut decisions = Vec::new();
@@ -304,6 +391,22 @@ mod tests {
         assert_eq!(merged.loop_counts["const-0"], 10);
         let restored = Profile::from_text(&merged.to_text()).unwrap();
         assert_eq!(restored.to_text(), merged.to_text());
+    }
+
+    #[test]
+    fn verify_writes_checklist() {
+        let dir = std::env::temp_dir().join(format!("autocomp-verify-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let source = sample_source(&dir);
+        let output = dir.join("demo.verify.txt");
+        let profile = Profile::from_text("f 2\nbranch:f 1 1\nloop:f 3\n").unwrap();
+        let workload = Workload { argv: vec!["demo".into()], stdin: None, timeout: Duration::from_secs(1) };
+        let mut compiler = AutoCompiler::default();
+        let report = compiler.verify(&source, &workload, &profile, &output).unwrap();
+        assert_eq!(report.checks.len(), 4);
+        assert!(report.all_passed());
+        assert!(output.exists());
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]

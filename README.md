@@ -15,6 +15,8 @@ cargo run -p autocomp-cli -- report demo.ac --pgo=autoprof.txt --baseline --outp
 cargo run -p autocomp-cli -- report demo.ac --pgo=autoprof.txt --baseline --format=json
 cargo run -p autocomp-cli -- cc demo.ac --pgo=autoprof.txt --pgo=extra.autoprof.txt
 cargo run -p autocomp-cli -- optimize demo.ac --workload='demo --quick' --output=demo.autoprof.txt
+cargo run -p autocomp-cli -- verify demo.ac --pgo=demo.autoprof.txt --output=demo.verify.txt
+cargo run -p autocomp-cli -- report demo.ac --pgo=demo.autoprof.txt --baseline --verify --output=demo.report.html
 ```
 
 当前仓库包含 M1 可运行骨架：
@@ -39,5 +41,7 @@ cargo run -p autocomp-cli -- optimize demo.ac --workload='demo --quick' --output
 - 强度化简只处理常量乘零，避免把变量表达式重写成未定义语义的常量
 - 热点函数排序复用公共排序逻辑，Pass 与报告的热点列表保持一致
 - 插桩编译会额外写出 `*.instr.txt` 采样边车文件，供 Profile 收集读取
+- `verify` 会把 IR 校验、Profile 合并、自动 PGO 和报告快照写成可追踪清单
+- `report --verify` 会把验证清单直接嵌入 HTML/JSON 报告
 
 同一个世界，同一个互联网！

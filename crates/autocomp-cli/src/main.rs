@@ -1,4 +1,4 @@
-use autocomp_core::{AutoCompiler, CompileOptions, Profile, ProfileFormat, Workload};
+use autocomp_core::{AutoCompiler, CompileOptions, Profile, ProfileFormat, VerifyReport, Workload};
 use std::io::Write;
 use std::process::{Command, Stdio};
 use std::fs;
@@ -13,12 +13,14 @@ fn main() -> Result<(), String> {
         "optimize" => auto_pgo(&args[2..]),
         "profile" => profile(&args[2..]),
         "report" => report(&args[2..]),
+        "verify" => verify(&args[2..]),
         "bench" => bench(&args[2..]),
         "help" | "--help" | "-h" => {
             println!("autocomp <command> [options]\n\nCommands:\n  cc               C compiler\n  c++              C++ compiler\n  profile          collect profile\n  optimize         PGO build\n  report           optimization report (HTML)\n  bench            quick benchmark\n\nOptions:\n  -O3              enable optimization level 3\n  --instrument     emit instrumented object\n  --pgo=<file>     compile with profile (repeatable)\n  --output=<file>  output path for profile/report\n  --workload=<s>   workload label for auto PGO
   --no-run         skip running the generated demo binary
   --baseline       compare optimized result with a plain build in report
   --format=json    emit JSON report instead of HTML
+  --verify         include reproducible verification in report
   --input=<file>   workload stdin fixture path
   ");
             Ok(())
@@ -133,6 +135,31 @@ fn profile(args: &[String]) -> Result<(), String> {
     Ok(())
 }
 
+fn verify(args: &[String]) -> Result<(), String> {
+    let source = source_from(args).ok_or("missing source file")?;
+    let output = option_value(args, "--output=").map(PathBuf::from)
+        .unwrap_or_else(|| source.with_extension("verify.txt"));
+    let workload_text = option_value(args, "--workload=").unwrap_or_else(|| "default verify workload".into());
+    let workload = Workload {
+        argv: workload_text.split_whitespace().map(str::to_string).collect(),
+        stdin: None,
+        timeout: Duration::from_secs(60),
+    };
+    let profile = load_profiles(args)?.unwrap_or_else(|| {
+        let mut profile = Profile::default();
+        profile.function_counts.insert(source.file_stem().and_then(|s| s.to_str()).unwrap_or("module").into(), 1);
+        profile
+    });
+    let mut compiler = AutoCompiler::default();
+    let report: VerifyReport = compiler.verify(&source, &workload, &profile, &output)?;
+    for check in &report.checks {
+        let status = if check.passed { "PASS" } else { "FAIL" };
+        println!("[{status}] {}: {}", check.name, check.detail);
+    }
+    println!("verification written to {} ({} / {} passed)", output.display(), report.passed_count(), report.checks.len());
+    Ok(())
+}
+
 fn report(args: &[String]) -> Result<(), String> {
     let input = args.iter().find(|a| !a.starts_with('-')).ok_or("missing source file")?;
     let source = if input.ends_with(".o") {
@@ -167,7 +194,25 @@ fn report(args: &[String]) -> Result<(), String> {
     } else {
         output
     };
-    let text = autocomp_core::report::render(&format!("AUTOCOMP Report · {}", source.display()), &result, profile.as_ref(), baseline.as_ref(), format);
+    let verify = if args.iter().any(|a| a == "--verify") {
+        let verify_path = option_value(args, "--verify-output=").map(PathBuf::from)
+            .unwrap_or_else(|| source.with_extension("verify.txt"));
+        let workload_text = option_value(args, "--workload=").unwrap_or_else(|| "default verify workload".into());
+        let workload = Workload {
+            argv: workload_text.split_whitespace().map(str::to_string).collect(),
+            stdin: None,
+            timeout: Duration::from_secs(60),
+        };
+        let verify_profile = profile.clone().unwrap_or_else(|| {
+            let mut p = Profile::default();
+            p.function_counts.insert(source.file_stem().and_then(|s| s.to_str()).unwrap_or("module").into(), 1);
+            p
+        });
+        Some(compiler.verify(&source, &workload, &verify_profile, &verify_path)?)
+    } else {
+        None
+    };
+    let text = autocomp_core::report::render(&format!("AUTOCOMP Report · {}", source.display()), &result, profile.as_ref(), baseline.as_ref(), verify.as_ref(), format);
     fs::write(&output, text).map_err(|e| e.to_string())?;
     println!("report written to {}", output.display());
     Ok(())

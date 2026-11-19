@@ -7,10 +7,10 @@ pub enum ReportFormat {
 }
 
 
-pub fn render(title: &str, result: &CompileResult, profile: Option<&Profile>, baseline: Option<&CompileResult>, format: ReportFormat) -> String {
+pub fn render(title: &str, result: &CompileResult, profile: Option<&Profile>, baseline: Option<&CompileResult>, verify: Option<&crate::VerifyReport>, format: ReportFormat) -> String {
     match format {
-        ReportFormat::Html => render_html(title, result, profile, baseline),
-        ReportFormat::Json => render_json(title, result, profile, baseline),
+        ReportFormat::Html => render_html(title, result, profile, baseline, verify),
+        ReportFormat::Json => render_json(title, result, profile, baseline, verify),
     }
 }
 
@@ -33,7 +33,7 @@ fn profile_mix(profile: Option<&Profile>) -> f64 {
     mixed / 3.0
 }
 
-pub fn render_json(title: &str, result: &CompileResult, profile: Option<&Profile>, baseline: Option<&CompileResult>) -> String {
+pub fn render_json(title: &str, result: &CompileResult, profile: Option<&Profile>, baseline: Option<&CompileResult>, verify: Option<&crate::VerifyReport>) -> String {
     fn escape(value: &str) -> String {
         let mut out = String::new();
         for ch in value.chars() {
@@ -60,6 +60,12 @@ pub fn render_json(title: &str, result: &CompileResult, profile: Option<&Profile
         "{{\"decisions\":{},\"products\":{}}}",
         base.decisions.len(), base.products.len()
     )).unwrap_or_else(|| "null".into());
+    let verify_json = verify.map(|v| format!(
+        "{{\"passed\":{},\"count\":{},\"checks\":[{}]}}",
+        if v.all_passed() { "true" } else { "false" },
+        v.checks.len(),
+        v.checks.iter().map(|c| format!("{{\"name\":\"{}\",\"passed\":{},\"detail\":\"{}\"}}", escape(&c.name), if c.passed { "true" } else { "false" }, escape(&c.detail))).collect::<Vec<_>>().join(",")
+    )).unwrap_or_else(|| "null".into());
     let profile_json = profile.map(|p| format!(
         "{{\"functions\":{},\"branches\":{},\"loops\":{},\"samples\":{},\"mix_score\":{:.2},\"hot\":[{}]}}",
         p.function_counts.len(), p.branch_counts.len(), p.loop_counts.len(),
@@ -69,14 +75,14 @@ pub fn render_json(title: &str, result: &CompileResult, profile: Option<&Profile
         profile_mix(Some(p)), hot_counts
     )).unwrap_or_else(|| "null".into());
     format!(
-        "{{\"title\":\"{}\",\"features\":{{\"functions\":{},\"instructions\":{},\"calls\":{},\"constants\":{}}},\"products\":{},\"decisions\":{},\"profile\":{},\"baseline\":{}}}",
+        "{{\"title\":\"{}\",\"features\":{{\"functions\":{},\"instructions\":{},\"calls\":{},\"constants\":{}}},\"products\":{},\"decisions\":{},\"profile\":{},\"baseline\":{},\"verify\":{}}}",
         escape(title), result.features.function_count, result.features.instruction_count,
         result.features.call_count, result.features.constant_count,
-        products, decisions, profile_json, baseline_json
+        products, decisions, profile_json, baseline_json, verify_json
     )
 }
 
-pub fn render_html(title: &str, result: &CompileResult, profile: Option<&Profile>, baseline: Option<&CompileResult>) -> String {
+pub fn render_html(title: &str, result: &CompileResult, profile: Option<&Profile>, baseline: Option<&CompileResult>, verify: Option<&crate::VerifyReport>) -> String {
     let escape = |s: &str| {
         s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;")
     };
@@ -176,6 +182,14 @@ pub fn render_html(title: &str, result: &CompileResult, profile: Option<&Profile
             + p.loop_counts.values().copied().sum::<u64>();
         if samples > 0 { String::new() } else { "<p class=\"muted\">当前 Profile 为空，优化决策回退到静态启发式。</p>".into() }
     }).unwrap_or_default();
+    let verify_section = verify.map(|v| {
+        let rows = v.checks.iter().map(|c| {
+            let status = if c.passed { "PASS" } else { "FAIL" };
+            format!("<tr><td>{}</td><td>{}</td><td>{}</td></tr>", status, escape(&c.name), escape(&c.detail))
+        }).collect::<Vec<_>>().join("");
+        let summary = format!("{} / {} passed", v.passed_count(), v.checks.len());
+        format!("<h2>验证清单</h2><div class=\"panel\"><span class=\"metric\">{}</span></div><table><thead><tr><th>状态</th><th>项目</th><th>说明</th></tr></thead><tbody>{}</tbody></table>", summary, rows)
+    }).unwrap_or_default();
     let hot_section = if hot_rows.is_empty() {
         String::new()
     } else {
@@ -183,7 +197,7 @@ pub fn render_html(title: &str, result: &CompileResult, profile: Option<&Profile
     };
 
     let html = format!(
-        "<!doctype html>\n<html lang=\"zh-CN\">\n<head>\n<meta charset=\"utf-8\">\n<title>{}</title>\n<style>\nbody{{font-family:system-ui,sans-serif;margin:2rem;color:#1f2937}}\nh1{{color:#2563eb}}\ncode{{background:#f3f4f6;padding:.15rem .35rem;border-radius:4px}}\nli{{margin:.35rem 0}}\ntable{{border-collapse:collapse;margin-top:.5rem}}td,th{{border:1px solid #d1d5db;padding:.4rem .7rem;text-align:left}}\n.panel{{background:#f8fafc;border-left:4px solid #2563eb;padding:.8rem 1rem;margin:1rem 0;display:flex;gap:1.2rem;flex-wrap:wrap;align-items:center}}\n.metric{{font-weight:600;color:#0f172a}}\n.gain{{color:#047857;background:#d1fae5;border-radius:999px;padding:.2rem .6rem;font-size:.9rem}}\n.muted{{color:#64748b;font-size:.9rem}}\n</style>\n</head>\n<body>\n<h1>{}</h1>\n<div class=\"panel\">函数 {} · 指令 {} · 调用 {} · 常量 {}</div>\n<h2>产物</h2><ul>{}</ul>\n<h2>优化决策</h2><ol>{}</ol>\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n</body>\n</html>\n",
+        "<!doctype html>\n<html lang=\"zh-CN\">\n<head>\n<meta charset=\"utf-8\">\n<title>{}</title>\n<style>\nbody{{font-family:system-ui,sans-serif;margin:2rem;color:#1f2937}}\nh1{{color:#2563eb}}\ncode{{background:#f3f4f6;padding:.15rem .35rem;border-radius:4px}}\nli{{margin:.35rem 0}}\ntable{{border-collapse:collapse;margin-top:.5rem}}td,th{{border:1px solid #d1d5db;padding:.4rem .7rem;text-align:left}}\n.panel{{background:#f8fafc;border-left:4px solid #2563eb;padding:.8rem 1rem;margin:1rem 0;display:flex;gap:1.2rem;flex-wrap:wrap;align-items:center}}\n.metric{{font-weight:600;color:#0f172a}}\n.gain{{color:#047857;background:#d1fae5;border-radius:999px;padding:.2rem .6rem;font-size:.9rem}}\n.muted{{color:#64748b;font-size:.9rem}}\n</style>\n</head>\n<body>\n<h1>{}</h1>\n<div class=\"panel\">函数 {} · 指令 {} · 调用 {} · 常量 {}</div>\n<h2>产物</h2><ul>{}</ul>\n<h2>优化决策</h2><ol>{}</ol>\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n</body>\n</html>\n",
         escape(title),
         escape(title),
         result.features.function_count,
@@ -195,6 +209,7 @@ pub fn render_html(title: &str, result: &CompileResult, profile: Option<&Profile
         perf_section,
         baseline_section,
         profile_note,
+        verify_section,
         hot_section,
         branch_section,
         loop_section,
@@ -215,7 +230,7 @@ mod tests {
             features: crate::FeatureSet::default(),
             decisions: vec!["backend: emitted <object>".into()],
         };
-        let html = render_html("AUTOCOMP & Report", &result, None, None);
+        let html = render_html("AUTOCOMP & Report", &result, None, None, None);
         assert!(html.contains("AUTOCOMP &amp; Report"));
         assert!(html.contains("&lt;object&gt;"));
         assert!(html.contains("demo.o"));
@@ -232,7 +247,7 @@ mod tests {
         profile.function_counts.insert("main".into(), 12);
         profile.branch_counts.insert("entry:main".into(), (4, 8));
         profile.loop_counts.insert("const-0".into(), 5);
-        let html = render_html("PGO Report", &result, Some(&profile), None);
+        let html = render_html("PGO Report", &result, Some(&profile), None, None);
         assert!(html.contains("分支 Profile"));
         assert!(html.contains("循环 Profile"));
         assert!(html.contains("66.7%"));
@@ -252,7 +267,7 @@ mod tests {
         };
         let mut profile = crate::Profile::default();
         profile.function_counts.insert("main".into(), 9);
-        let json = render_json("AUTOCOMP", &result, Some(&profile), Some(&baseline));
+        let json = render_json("AUTOCOMP", &result, Some(&profile), Some(&baseline), None);
         assert!(json.contains("\"title\":\"AUTOCOMP\""));
         assert!(json.contains("\"profile\""));
         assert!(json.contains("\"baseline\""));
@@ -273,7 +288,7 @@ mod tests {
         };
         let mut profile = crate::Profile::default();
         profile.function_counts.insert("main".into(), 9);
-        let html = render_html("PGO Summary", &result, Some(&profile), Some(&baseline));
+        let html = render_html("PGO Summary", &result, Some(&profile), Some(&baseline), None);
         assert!(html.contains("性能摘要"));
         assert!(html.contains("启发式评分"));
         assert!(html.contains("Profile 1 / 热点 1"));
@@ -290,7 +305,7 @@ mod tests {
         profile.function_counts.insert("main".into(), 9);
         profile.branch_counts.insert("entry:main".into(), (4, 5));
         profile.loop_counts.insert("const-0".into(), 7);
-        let json = render_json("AUTOCOMP", &result, Some(&profile), None);
+        let json = render_json("AUTOCOMP", &result, Some(&profile), None, None);
         assert!(json.contains("\"mix_score\":1.00"));
     }
 
@@ -306,7 +321,7 @@ mod tests {
             features: crate::FeatureSet::default(),
             decisions: vec!["backend: emitted demo.o".into()],
         };
-        let html = render_html("PGO Compare", &result, None, Some(&baseline));
+        let html = render_html("PGO Compare", &result, None, Some(&baseline), None);
         assert!(html.contains("PGO 对照"));
         assert!(html.contains("+1"));
     }
@@ -331,14 +346,41 @@ mod extra_tests {
         profile.function_counts.insert("main".into(), 3);
         profile.branch_counts.insert("entry:main".into(), (1, 2));
         profile.loop_counts.insert("const-0".into(), 4);
-        let json = render_json("AUTOCOMP", &result(), Some(&profile), None);
+        let json = render_json("AUTOCOMP", &result(), Some(&profile), None, None);
         assert!(json.contains("\"samples\":10"));
     }
 
     #[test]
     fn html_report_notes_empty_profile() {
         let profile = crate::Profile::default();
-        let html = render_html("Empty PGO", &result(), Some(&profile), None);
+        let html = render_html("Empty PGO", &result(), Some(&profile), None, None);
         assert!(html.contains("当前 Profile 为空"));
+    }
+}
+
+#[cfg(test)]
+mod verify_tests {
+    use super::*;
+
+    #[test]
+    fn report_includes_verify_section() {
+        let profile = crate::Profile::default();
+        let verify = crate::VerifyReport {
+            checks: vec![crate::VerifyCheck {
+                name: "ir-verify".into(),
+                passed: true,
+                detail: "1 functions parsed".into(),
+            }],
+        };
+        let result = crate::CompileResult {
+            products: vec![std::path::PathBuf::from("demo.o")],
+            features: crate::FeatureSet::default(),
+            decisions: vec![],
+        };
+        let html = render_html("Verify", &result, Some(&profile), None, Some(&verify));
+        assert!(html.contains("验证清单"));
+        assert!(html.contains("1 / 1 passed"));
+        let json = render_json("Verify", &result, Some(&profile), None, Some(&verify));
+        assert!(json.contains("\"verify\""));
     }
 }

@@ -50,12 +50,12 @@ pub struct Module {
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct VerifyReport {
+pub struct ModuleVerifyReport {
     pub errors: Vec<String>,
     pub warnings: Vec<String>,
 }
 
-impl VerifyReport {
+impl ModuleVerifyReport {
     pub fn is_valid(&self) -> bool {
         self.errors.is_empty()
     }
@@ -129,8 +129,8 @@ impl Module {
         })
     }
 
-    pub fn verify(&self) -> VerifyReport {
-        let mut report = VerifyReport::default();
+    pub fn verify(&self) -> ModuleVerifyReport {
+        let mut report = ModuleVerifyReport::default();
         let mut names = std::collections::HashSet::new();
         for function in &self.functions {
             if !names.insert(function.name.as_str()) {
