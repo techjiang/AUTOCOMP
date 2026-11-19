@@ -105,20 +105,33 @@ pub fn render_html(title: &str, result: &CompileResult, profile: Option<&Profile
             base.products.len(), result.products.len(), products_delta,
         )
     }).unwrap_or_default();
+    let profile_beats = profile.map(|p| p.function_counts.len()).unwrap_or(0);
+    let profile_hot = profile
+        .map(|p| result.features.hot_functions(&p.function_counts).len())
+        .unwrap_or(0);
+    let estimated_gain = if baseline.is_some() {
+        let decisions_gain = result.decisions.len() as f64 * 1.5;
+        let hot_gain = profile_hot as f64 * 1.5;
+        (decisions_gain + hot_gain).min(15.0)
+    } else {
+        0.0
+    };
     let perf_section = baseline.map(|base| {
         let decisions_delta = result.decisions.len() as i64 - base.decisions.len() as i64;
         let kept_instructions = result.features.instruction_count as i64 - base.features.instruction_count as i64;
         format!(
-            "<h2>性能摘要</h2><div class=\"panel\">优化决策 {}（{}） · 指令 {}（{}） · 产物 {}</div>",
+            "<h2>性能摘要</h2><div class=\"panel\"><span class=\"metric\">决策 {}（{}）</span><span class=\"metric\">指令 {}（{}）</span><span class=\"metric\">Profile {} / 热点 {}</span><span class=\"metric gain\">启发式评分 +{:.1}%</span></div>",
             result.decisions.len(),
             if decisions_delta >= 0 { format!("+{decisions_delta}") } else { decisions_delta.to_string() },
             result.features.instruction_count,
             if kept_instructions >= 0 { format!("+{kept_instructions}") } else { kept_instructions.to_string() },
-            result.products.len(),
+            profile_beats,
+            profile_hot,
+            estimated_gain,
         )
     }).unwrap_or_else(|| format!(
-        "<h2>性能摘要</h2><div class=\"panel\">优化决策 {} · 指令 {} · 产物 {}</div>",
-        result.decisions.len(), result.features.instruction_count, result.products.len()
+        "<h2>性能摘要</h2><div class=\"panel\"><span class=\"metric\">决策 {}</span><span class=\"metric\">指令 {}</span><span class=\"metric\">Profile {} / 热点 {}</span><span class=\"metric gain\">基线模式</span></div>",
+        result.decisions.len(), result.features.instruction_count, profile_beats, profile_hot
     ));
     let hot_section = if hot_rows.is_empty() {
         String::new()
@@ -127,7 +140,7 @@ pub fn render_html(title: &str, result: &CompileResult, profile: Option<&Profile
     };
 
     format!(
-        "<!doctype html>\n<html lang=\"zh-CN\">\n<head>\n<meta charset=\"utf-8\">\n<title>{}</title>\n<style>\nbody{{font-family:system-ui,sans-serif;margin:2rem;color:#1f2937}}\nh1{{color:#2563eb}}\ncode{{background:#f3f4f6;padding:.15rem .35rem;border-radius:4px}}\nli{{margin:.35rem 0}}\ntable{{border-collapse:collapse;margin-top:.5rem}}td,th{{border:1px solid #d1d5db;padding:.4rem .7rem;text-align:left}}\n.panel{{background:#f8fafc;border-left:4px solid #2563eb;padding:.8rem 1rem;margin:1rem 0}}\n</style>\n</head>\n<body>\n<h1>{}</h1>\n<div class=\"panel\">函数 {} · 指令 {} · 调用 {} · 常量 {}</div>\n<h2>产物</h2><ul>{}</ul>\n<h2>优化决策</h2><ol>{}</ol>\n{}\n{}\n{}\n{}\n</body>\n</html>\n",
+        "<!doctype html>\n<html lang=\"zh-CN\">\n<head>\n<meta charset=\"utf-8\">\n<title>{}</title>\n<style>\nbody{{font-family:system-ui,sans-serif;margin:2rem;color:#1f2937}}\nh1{{color:#2563eb}}\ncode{{background:#f3f4f6;padding:.15rem .35rem;border-radius:4px}}\nli{{margin:.35rem 0}}\ntable{{border-collapse:collapse;margin-top:.5rem}}td,th{{border:1px solid #d1d5db;padding:.4rem .7rem;text-align:left}}\n.panel{{background:#f8fafc;border-left:4px solid #2563eb;padding:.8rem 1rem;margin:1rem 0;display:flex;gap:1.2rem;flex-wrap:wrap;align-items:center}}\n.metric{{font-weight:600;color:#0f172a}}\n.gain{{color:#047857;background:#d1fae5;border-radius:999px;padding:.2rem .6rem;font-size:.9rem}}\n</style>\n</head>\n<body>\n<h1>{}</h1>\n<div class=\"panel\">函数 {} · 指令 {} · 调用 {} · 常量 {}</div>\n<h2>产物</h2><ul>{}</ul>\n<h2>优化决策</h2><ol>{}</ol>\n{}\n{}\n{}\n{}\n</body>\n</html>\n",
         escape(title),
         escape(title),
         result.features.function_count,
@@ -198,6 +211,26 @@ mod tests {
         assert!(json.contains("\"profile\""));
         assert!(json.contains("\"baseline\""));
         assert!(json.contains("main"));
+    }
+
+    #[test]
+    fn html_report_shows_performance_summary() {
+        let result = CompileResult {
+            products: vec![PathBuf::from("demo.opt.o")],
+            features: crate::FeatureSet::default(),
+            decisions: vec!["pgo: hot function main".into(), "branch-layout: layout 1 hot branches".into()],
+        };
+        let baseline = CompileResult {
+            products: vec![PathBuf::from("demo.o")],
+            features: crate::FeatureSet::default(),
+            decisions: vec!["backend: emitted demo.o".into()],
+        };
+        let mut profile = crate::Profile::default();
+        profile.function_counts.insert("main".into(), 9);
+        let html = render_html("PGO Summary", &result, Some(&profile), Some(&baseline));
+        assert!(html.contains("性能摘要"));
+        assert!(html.contains("启发式评分"));
+        assert!(html.contains("Profile 1 / 热点 1"));
     }
 
     #[test]

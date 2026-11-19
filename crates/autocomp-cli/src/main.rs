@@ -18,7 +18,8 @@ fn main() -> Result<(), String> {
             println!("autocomp <command> [options]\n\nCommands:\n  cc               C compiler\n  c++              C++ compiler\n  profile          collect profile\n  optimize         PGO build\n  report           optimization report (HTML)\n  bench            quick benchmark\n\nOptions:\n  -O3              enable optimization level 3\n  --instrument     emit instrumented object\n  --pgo=<file>     compile with profile\n  --output=<file>  output path for profile/report\n  --workload=<s>   workload label for auto PGO
   --no-run         skip running the generated demo binary
   --baseline       compare optimized result with a plain build in report
-  --format=json    emit JSON report instead of HTML");
+  --format=json    emit JSON report instead of HTML
+  ");
             Ok(())
         }
         other => Err(format!("unknown command: {other}")),
@@ -67,6 +68,9 @@ fn compile(args: &[String]) -> Result<(), String> {
     if args.iter().any(|a| a == "--baseline") {
         let baseline = compiler.compile(&source, &CompileOptions::default())?;
         print_result("baseline", &baseline);
+        println!("  [summary] decisions {} -> {}, products {} -> {}",
+            baseline.decisions.len(), result.decisions.len(),
+            baseline.products.len(), result.products.len());
     }
     Ok(())
 }
