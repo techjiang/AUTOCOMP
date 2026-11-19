@@ -16,7 +16,8 @@ fn main() -> Result<(), String> {
         "bench" => bench(&args[2..]),
         "help" | "--help" | "-h" => {
             println!("autocomp <command> [options]\n\nCommands:\n  cc               C compiler\n  c++              C++ compiler\n  profile          collect profile\n  optimize         PGO build\n  report           optimization report (HTML)\n  bench            quick benchmark\n\nOptions:\n  -O3              enable optimization level 3\n  --instrument     emit instrumented object\n  --pgo=<file>     compile with profile\n  --output=<file>  output path for profile/report\n  --workload=<s>   workload label for auto PGO
-  --no-run         skip running the generated demo binary");
+  --no-run         skip running the generated demo binary
+  --baseline       compare optimized result with a plain build in report");
             Ok(())
         }
         other => Err(format!("unknown command: {other}")),
@@ -62,6 +63,10 @@ fn compile(args: &[String]) -> Result<(), String> {
         _ => compiler.compile(&source, &options)?,
     };
     print_result("compiled", &result);
+    if args.iter().any(|a| a == "--baseline") {
+        let baseline = compiler.compile(&source, &CompileOptions::default())?;
+        print_result("baseline", &baseline);
+    }
     Ok(())
 }
 
@@ -78,10 +83,17 @@ fn auto_pgo(args: &[String]) -> Result<(), String> {
         optimization_level: args.iter().position(|a| a == "-O3").map(|_| 3).unwrap_or(0),
         ..CompileOptions::default()
     };
-    let result = compiler.compile_auto_pgo(&source, &workload, &options)?;
+    let instrument_options = CompileOptions { instrument: true, ..options.clone() };
+    let instrumented = compiler.compile(&source, &instrument_options)?;
+    print_result("instrumented", &instrumented);
+    let collected = autocomp_core::WorkloadProfile::from_workload(&workload, &instrumented)?;
+    let profile_path = source.with_extension("autoprof.txt");
+    fs::write(&profile_path, collected.render(ProfileFormat::Text)?).map_err(|e| e.to_string())?;
+    println!("profile written to {} ({} samples)", profile_path.display(), collected.sample_count);
+    let result = compiler.compile_with_pgo(&source, &collected.profile, &options)?;
     print_result("auto-pgo", &result);
     if !args.iter().any(|a| a == "--no-run") {
-        if let Some(program) = result.products.iter().find(|p| p.extension().and_then(|e| e.to_str()) == Some("bin")) {
+        if let Some(program) = instrumented.products.iter().find(|p| p.extension().and_then(|e| e.to_str()) == Some("bin")) {
             run_workload(program, &workload)?;
         }
     }
@@ -120,7 +132,12 @@ fn report(args: &[String]) -> Result<(), String> {
         Some(profile) => compiler.compile_with_pgo(&source, profile, &options)?,
         None => compiler.compile(&source, &options)?,
     };
-    let html = autocomp_core::report::render_html(&format!("AUTOCOMP Report · {}", source.display()), &result, profile.as_ref());
+    let baseline = if args.iter().any(|a| a == "--baseline") {
+        Some(compiler.compile(&source, &CompileOptions::default())?)
+    } else {
+        None
+    };
+    let html = autocomp_core::report::render_html(&format!("AUTOCOMP Report · {}", source.display()), &result, profile.as_ref(), baseline.as_ref());
     fs::write(&output, html).map_err(|e| e.to_string())?;
     println!("report written to {}", output.display());
     Ok(())
