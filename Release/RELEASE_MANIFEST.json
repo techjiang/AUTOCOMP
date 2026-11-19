@@ -1,0 +1,38 @@
+{
+  "name": "AUTOCOMP",
+  "version": "v1.0.0",
+  "edition": "release",
+  "tagline": "让编译器学会思考",
+  "author": {
+    "name": "科技酱",
+    "homepage": "https://www.asoe.cn",
+    "docs": "https://docs.asoe.cn",
+    "github": "https://github.com/techjiang/",
+    "bilibili": "https://space.bilibili.com/1768832152",
+    "email": "official@tech.asoe.cn",
+    "forums": "https://forums.asoe.cn/"
+  },
+  "license": "Apache-2.0",
+  "targets": ["x86_64", "ARM64", "RISC-V"],
+  "languages": ["C", "C++", "Rust"],
+  "features": [
+    "IR parsing and definition/use validation",
+    "Profile text format with function, branch, and loop samples",
+    "Optimization pass pipeline",
+    "Automatic PGO flow with instrumented artifacts",
+    "HTML and JSON optimization reports",
+    "Profile merge report",
+    "PASS/SKIP/FAIL verification checklist and strict mode"
+  ],
+  "verification": {
+    "status": "manual-source-review",
+    "rust_toolchain_available": false,
+    "cargo_test_executed": false,
+    "static_checks": ["git diff --check", "report fixture review"],
+    "note": "The execution environment did not have cargo/rustc installed. CI or a local Rust toolchain should run cargo test --workspace before production use."
+  },
+  "release_policy": {
+    "primary": "GitHub Release techjiang/AUTOCOMP v1.0.0",
+    "fallback": "Release/ directory in repository"
+  }
+}

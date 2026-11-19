@@ -26,3 +26,7 @@
 - 验证清单区分 PASS / SKIP / FAIL，新增 `--strict-verify` 严格模式
 - Profile 合并报告展示采样数、重叠项和三类 Profile 分布
 - 新增代数化简 Pass，自动 PGO 打印分支/循环覆盖明细，`verify --strict-check` 支持严格门禁
+
+## Release v1.0.0
+
+- Final release manifest, source archive, and checksum added for GitHub Release / in-repo fallback publishing.
