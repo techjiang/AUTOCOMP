@@ -34,6 +34,8 @@ cargo run -p autocomp-cli -- optimize demo.ac --workload='demo --quick' --output
 - `optimize --output` 可指定自动 PGO 写出的 Profile 路径
 - JSON 报告新增 `samples` 字段，空 Profile 会在 HTML 报告中标注回退到静态启发式
 - 自动 PGO 会同时输出 workload 采样数、Profile 采样总数和函数/分支/循环覆盖数量
+- 复制传播会把常量别名替换回使用点，随后可由常量折叠继续化简
+- 调用图会输出候选内联提示，热点调用会优先展示
 - 强度化简只处理常量乘零，避免把变量表达式重写成未定义语义的常量
 - 热点函数排序复用公共排序逻辑，Pass 与报告的热点列表保持一致
 - 插桩编译会额外写出 `*.instr.txt` 采样边车文件，供 Profile 收集读取

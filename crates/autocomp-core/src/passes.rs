@@ -214,11 +214,103 @@ fn hot_function_names(profile: &Profile, module: &Module, limit: usize) -> Vec<S
         .collect()
 }
 
+pub struct InlineHint;
+
+impl OptimizationPass for InlineHint {
+    fn name(&self) -> &str { "inline-hint" }
+
+    fn run(&mut self, module: &mut Module, ctx: &PassContext) -> Result<PassResult, String> {
+        let graph = crate::ir::CallGraph::from_module(module);
+        let mut candidates = Vec::new();
+        for (caller, callees) in &graph.edges {
+            for callee in callees {
+                let Some(target) = module.functions.iter().find(|f| &f.name == callee) else {
+                    continue;
+                };
+                if target.instructions.len() > 8 || graph.edges.get(callee).map(|v| v.len()).unwrap_or(0) > 0 {
+                    continue;
+                }
+                let hot = ctx.profile
+                    .map(|p| p.function_counts.get(caller).copied().unwrap_or(0))
+                    .unwrap_or(0);
+                candidates.push((hot, caller.clone(), callee.clone(), target.instructions.len()));
+            }
+        }
+        candidates.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)).then(a.2.cmp(&b.2)));
+        let top = candidates.iter().take(5).map(|(hot, caller, callee, size)| {
+            if *hot > 0 {
+                format!("{caller}->{callee} ({size} insts, hot={hot})")
+            } else {
+                format!("{caller}->{callee} ({size} insts)")
+            }
+        }).collect::<Vec<_>>().join(", ");
+        Ok(PassResult {
+            changed: false,
+            note: if top.is_empty() { "no inline candidates".into() } else { top },
+        })
+    }
+}
+
+pub struct CopyPropagation;
+
+impl OptimizationPass for CopyPropagation {
+    fn name(&self) -> &str { "copy-propagation" }
+
+    fn run(&mut self, module: &mut Module, _ctx: &PassContext) -> Result<PassResult, String> {
+        let mut propagated = 0;
+        for func in &mut module.functions {
+            let mut replacements: std::collections::HashMap<Id, Value> = std::collections::HashMap::new();
+            for inst in &mut func.instructions {
+                if let Instruction::Const { dest, value } = inst {
+                    replacements.insert(*dest, Value::Const(*value));
+                    continue;
+                }
+                let before = format!("{inst:?}");
+                replace_values(inst, &replacements);
+                if format!("{inst:?}") != before {
+                    propagated += 1;
+                }
+            }
+        }
+        Ok(PassResult {
+            changed: propagated > 0,
+            note: format!("propagate {propagated} constant copies"),
+        })
+    }
+}
+
+fn replace_values(inst: &mut Instruction, replacements: &std::collections::HashMap<Id, Value>) {
+    fn replace(value: &mut Value, replacements: &std::collections::HashMap<Id, Value>) {
+        if let Value::Local(id) = value {
+            if let Some(replacement) = replacements.get(id) {
+                *value = replacement.clone();
+            }
+        }
+    }
+    match inst {
+        Instruction::Const { .. } => {}
+        Instruction::Return(value) => replace(value, replacements),
+        Instruction::Add { lhs, rhs, .. }
+        | Instruction::Sub { lhs, rhs, .. }
+        | Instruction::Mul { lhs, rhs, .. } => {
+            replace(lhs, replacements);
+            replace(rhs, replacements);
+        }
+        Instruction::Call { args, .. } => {
+            for arg in args {
+                replace(arg, replacements);
+            }
+        }
+    }
+}
+
 pub fn default_passes() -> Vec<Box<dyn OptimizationPass>> {
     vec![
         Box::new(ConstantFolding),
+        Box::new(CopyPropagation),
         Box::new(StrengthReduction),
         Box::new(DeadCodeElimination),
+        Box::new(InlineHint),
         Box::new(HotCallHint),
         Box::new(BranchLayout),
         Box::new(LoopTilingHint),
@@ -307,6 +399,47 @@ mod tests {
             instructions: vec![Instruction::Return(Value::Const(0))],
         });
         module
+    }
+
+    #[test]
+    fn copy_propagation_feeds_constant_folding() {
+        let mut module = module_clone();
+        module.functions[0].instructions = vec![
+            Instruction::Const { dest: 2, value: 7 },
+            Instruction::Add { dest: 3, lhs: Value::Local(2), rhs: Value::Const(5) },
+            Instruction::Return(Value::Local(3)),
+        ];
+        let ctx = PassContext { profile: None };
+        let mut copy = CopyPropagation;
+        assert!(copy.run(&mut module, &ctx).unwrap().changed);
+        assert_eq!(module.functions[0].instructions[1], Instruction::Add { dest: 3, lhs: Value::Const(7), rhs: Value::Const(5) });
+        let mut fold = ConstantFolding;
+        assert!(fold.run(&mut module, &ctx).unwrap().changed);
+        assert_eq!(module.functions[0].instructions[1], Instruction::Const { dest: 3, value: 12 });
+    }
+
+    #[test]
+    fn inline_hint_reports_call_graph_candidates() {
+        let mut module = Module::default();
+        module.functions.push(crate::ir::Function {
+            id: 1,
+            name: "main".into(),
+            args: vec![],
+            instructions: vec![Instruction::Call { dest: Some(2), callee: "sum".into(), args: vec![] }, Instruction::Return(Value::Local(2))],
+        });
+        module.functions.push(crate::ir::Function {
+            id: 3,
+            name: "sum".into(),
+            args: vec![],
+            instructions: vec![Instruction::Const { dest: 4, value: 5 }, Instruction::Return(Value::Local(4))],
+        });
+        let mut profile = Profile::default();
+        profile.function_counts.insert("main".into(), 20);
+        let ctx = PassContext { profile: Some(&profile) };
+        let mut hint = InlineHint;
+        let result = hint.run(&mut module, &ctx).unwrap();
+        assert!(result.note.contains("main->sum"));
+        assert!(result.note.contains("hot=20"));
     }
 
     #[test]
