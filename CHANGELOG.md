@@ -10,4 +10,6 @@
 - `optimize --no-run` 仍会写出 Profile，便于离线 PGO
 - `report --baseline` 展示 PGO 与基线编译的决策和产物对照
 - Profile 驱动分支布局与循环分块提示进入默认 Pass，报告新增 JSON 格式与性能摘要
-- HTML 报告性能摘要加入 Profile 覆盖、热点函数与预估提升指标，`cc --baseline` 输出精简对照
+- HTML 报告性能摘要加入 Profile 覆盖、覆盖度、热点函数与启发式评分，并注明评分不是实测性能提升
+- `--pgo` 支持重复传入并合并多个 Profile，JSON 报告新增 `mix_score` 字段
+- `report --format=json` 默认写出 `*.report.json`，`cc --baseline` 输出精简对照

@@ -275,6 +275,24 @@ mod tests {
     }
 
     #[test]
+    fn profile_merge_and_text_round_trip() {
+        let mut left = Profile::default();
+        left.function_counts.insert("main".into(), 3);
+        left.branch_counts.insert("entry:main".into(), (1, 2));
+        left.loop_counts.insert("const-0".into(), 4);
+        let mut right = Profile::default();
+        right.function_counts.insert("main".into(), 5);
+        right.branch_counts.insert("entry:main".into(), (2, 3));
+        right.loop_counts.insert("const-0".into(), 6);
+        let merged = left.merge(&right);
+        assert_eq!(merged.function_counts["main"], 8);
+        assert_eq!(merged.branch_counts["entry:main"], (3, 5));
+        assert_eq!(merged.loop_counts["const-0"], 10);
+        let restored = Profile::from_text(&merged.to_text()).unwrap();
+        assert_eq!(restored.to_text(), merged.to_text());
+    }
+
+    #[test]
     fn auto_pgo_collects_profile_and_optimizes() {
         let dir = std::env::temp_dir().join(format!("autocomp-auto-pgo-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();

@@ -15,7 +15,7 @@ fn main() -> Result<(), String> {
         "report" => report(&args[2..]),
         "bench" => bench(&args[2..]),
         "help" | "--help" | "-h" => {
-            println!("autocomp <command> [options]\n\nCommands:\n  cc               C compiler\n  c++              C++ compiler\n  profile          collect profile\n  optimize         PGO build\n  report           optimization report (HTML)\n  bench            quick benchmark\n\nOptions:\n  -O3              enable optimization level 3\n  --instrument     emit instrumented object\n  --pgo=<file>     compile with profile\n  --output=<file>  output path for profile/report\n  --workload=<s>   workload label for auto PGO
+            println!("autocomp <command> [options]\n\nCommands:\n  cc               C compiler\n  c++              C++ compiler\n  profile          collect profile\n  optimize         PGO build\n  report           optimization report (HTML)\n  bench            quick benchmark\n\nOptions:\n  -O3              enable optimization level 3\n  --instrument     emit instrumented object\n  --pgo=<file>     compile with profile (repeatable)\n  --output=<file>  output path for profile/report\n  --workload=<s>   workload label for auto PGO
   --no-run         skip running the generated demo binary
   --baseline       compare optimized result with a plain build in report
   --format=json    emit JSON report instead of HTML
@@ -34,11 +34,19 @@ fn option_value(args: &[String], name: &str) -> Option<String> {
     args.iter().find_map(|a| a.strip_prefix(name).map(str::to_string))
 }
 
-fn load_profile(args: &[String]) -> Result<Option<Profile>, String> {
-    match option_value(args, "--pgo=") {
-        Some(path) => Ok(Some(Profile::from_text(&fs::read_to_string(path).map_err(|e| e.to_string())?)?)),
-        None => Ok(None),
+fn load_profiles(args: &[String]) -> Result<Option<Profile>, String> {
+    let mut merged: Option<Profile> = None;
+    for arg in args {
+        if let Some(path) = arg.strip_prefix("--pgo=") {
+            let text = fs::read_to_string(path).map_err(|e| e.to_string())?;
+            let profile = Profile::from_text(&text)?;
+            merged = Some(match merged {
+                Some(existing) => existing.merge(&profile),
+                None => profile,
+            });
+        }
     }
+    Ok(merged)
 }
 
 fn print_result(label: &str, result: &autocomp_core::CompileResult) {
@@ -50,7 +58,7 @@ fn print_result(label: &str, result: &autocomp_core::CompileResult) {
 
 fn compile(args: &[String]) -> Result<(), String> {
     let source = source_from(args).ok_or("missing source file")?;
-    let profile = load_profile(args)?;
+    let profile = load_profiles(args)?;
     let mut options = CompileOptions {
         optimization_level: args.iter().position(|a| a == "-O3").map(|_| 3).unwrap_or(0),
         instrument: args.iter().any(|a| a == "--instrument"),
@@ -126,8 +134,14 @@ fn report(args: &[String]) -> Result<(), String> {
     } else {
         PathBuf::from(input)
     };
-    let output = option_value(args, "--output=").map(PathBuf::from).unwrap_or_else(|| source.with_extension("report.html"));
-    let profile = load_profile(args)?;
+    let format = match option_value(args, "--format=").as_deref() {
+        Some("json") => autocomp_core::report::ReportFormat::Json,
+        Some("html") | None => autocomp_core::report::ReportFormat::Html,
+        Some(other) => return Err(format!("unsupported report format: {other}")),
+    };
+    let default_ext = if format == autocomp_core::report::ReportFormat::Json { "report.json" } else { "report.html" };
+    let output = option_value(args, "--output=").map(PathBuf::from).unwrap_or_else(|| source.with_extension(default_ext));
+    let profile = load_profiles(args)?;
     let mut compiler = AutoCompiler::default();
     let options = CompileOptions {
         pgo_profile: option_value(args, "--pgo=").map(PathBuf::from),
@@ -141,11 +155,6 @@ fn report(args: &[String]) -> Result<(), String> {
         Some(compiler.compile(&source, &CompileOptions::default())?)
     } else {
         None
-    };
-    let format = match option_value(args, "--format=").as_deref() {
-        Some("json") => autocomp_core::report::ReportFormat::Json,
-        Some("html") | None => autocomp_core::report::ReportFormat::Html,
-        Some(other) => return Err(format!("unsupported report format: {other}")),
     };
     let output = if format == autocomp_core::report::ReportFormat::Json && output.extension().and_then(|e| e.to_str()) == Some("html") {
         output.with_extension("json")

@@ -12,7 +12,8 @@ cargo run -p autocomp-cli -- cc demo.ac -O3
 cargo run -p autocomp-cli -- profile demo.ac --output=autoprof.txt
 cargo run -p autocomp-cli -- cc demo.ac --pgo=autoprof.txt --baseline
 cargo run -p autocomp-cli -- report demo.ac --pgo=autoprof.txt --baseline --output=demo.report.html
-cargo run -p autocomp-cli -- report demo.ac --pgo=autoprof.txt --baseline --format=json --output=demo.report.json
+cargo run -p autocomp-cli -- report demo.ac --pgo=autoprof.txt --baseline --format=json
+cargo run -p autocomp-cli -- cc demo.ac --pgo=autoprof.txt --pgo=extra.autoprof.txt
 cargo run -p autocomp-cli -- optimize demo.ac --workload='demo --quick'
 ```
 
@@ -26,7 +27,9 @@ cargo run -p autocomp-cli -- optimize demo.ac --workload='demo --quick'
 - `report --baseline` 会在 HTML 报告里加入 PGO 对照表
 - `report --format=json` 可输出可机读的 JSON 报告，HTML 报告新增性能摘要
 - Profile 会驱动分支布局和循环分块提示，随优化决策一起展示
-- HTML 报告性能摘要展示 Profile 覆盖、热点函数与启发式评分，CLI `--baseline` 输出决策/产物对照
+- HTML 报告性能摘要展示 Profile 覆盖、覆盖度、热点函数与启发式评分，并注明评分不是实测性能提升
+- `--pgo` 可重复传入多个 Profile，CLI 会合并后参与优化与报告
+- `report --format=json` 默认输出 `*.report.json`，JSON 报告包含 Profile 覆盖度评分
 - `report` 会生成带优化决策、热点函数、分支与循环 Profile 的 HTML 报告
 
 同一个世界，同一个互联网！

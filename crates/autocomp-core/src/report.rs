@@ -14,6 +14,25 @@ pub fn render(title: &str, result: &CompileResult, profile: Option<&Profile>, ba
     }
 }
 
+fn profile_mix(profile: Option<&Profile>) -> f64 {
+    let Some(profile) = profile else {
+        return 0.0;
+    };
+    let function_samples = profile.function_counts.values().copied().sum::<u64>();
+    let branch_samples = profile
+        .branch_counts
+        .values()
+        .map(|(false_count, true_count)| false_count + true_count)
+        .sum::<u64>();
+    let loop_samples = profile.loop_counts.values().copied().sum::<u64>();
+    let total = function_samples + branch_samples + loop_samples;
+    if total == 0 {
+        return 0.0;
+    }
+    let mixed = [function_samples, branch_samples, loop_samples].iter().filter(|count| **count > 0).count() as f64;
+    mixed / 3.0
+}
+
 pub fn render_json(title: &str, result: &CompileResult, profile: Option<&Profile>, baseline: Option<&CompileResult>) -> String {
     fn escape(value: &str) -> String {
         let mut out = String::new();
@@ -42,8 +61,8 @@ pub fn render_json(title: &str, result: &CompileResult, profile: Option<&Profile
         base.decisions.len(), base.products.len()
     )).unwrap_or_else(|| "null".into());
     let profile_json = profile.map(|p| format!(
-        "{{\"functions\":{},\"branches\":{},\"loops\":{},\"hot\":[{}]}}",
-        p.function_counts.len(), p.branch_counts.len(), p.loop_counts.len(), hot_counts
+        "{{\"functions\":{},\"branches\":{},\"loops\":{},\"mix_score\":{:.2},\"hot\":[{}]}}",
+        p.function_counts.len(), p.branch_counts.len(), p.loop_counts.len(), profile_mix(Some(p)), hot_counts
     )).unwrap_or_else(|| "null".into());
     format!(
         "{{\"title\":\"{}\",\"features\":{{\"functions\":{},\"instructions\":{},\"calls\":{},\"constants\":{}}},\"products\":{},\"decisions\":{},\"profile\":{},\"baseline\":{}}}",
@@ -109,10 +128,11 @@ pub fn render_html(title: &str, result: &CompileResult, profile: Option<&Profile
     let profile_hot = profile
         .map(|p| result.features.hot_functions(&p.function_counts).len())
         .unwrap_or(0);
+    let confidence = if profile_beats == 0 { 0.0 } else { 25.0 + 75.0 * profile_mix(profile) };
     let estimated_gain = if baseline.is_some() {
         let decisions_gain = result.decisions.len() as f64 * 1.5;
         let hot_gain = profile_hot as f64 * 1.5;
-        (decisions_gain + hot_gain).min(15.0)
+        (decisions_gain + hot_gain) * confidence / 100.0
     } else {
         0.0
     };
@@ -120,13 +140,14 @@ pub fn render_html(title: &str, result: &CompileResult, profile: Option<&Profile
         let decisions_delta = result.decisions.len() as i64 - base.decisions.len() as i64;
         let kept_instructions = result.features.instruction_count as i64 - base.features.instruction_count as i64;
         format!(
-            "<h2>性能摘要</h2><div class=\"panel\"><span class=\"metric\">决策 {}（{}）</span><span class=\"metric\">指令 {}（{}）</span><span class=\"metric\">Profile {} / 热点 {}</span><span class=\"metric gain\">启发式评分 +{:.1}%</span></div>",
+            "<h2>性能摘要</h2><div class=\"panel\"><span class=\"metric\">决策 {}（{}）</span><span class=\"metric\">指令 {}（{}）</span><span class=\"metric\">Profile {} / 热点 {}</span><span class=\"metric\">覆盖度 {:.0}%</span><span class=\"metric gain\">启发式评分 +{:.1}%</span></div><p class=\"muted\">评分只表示决策置信度，不是实测性能提升；需以 bench 或基准测试为准。</p>",
             result.decisions.len(),
             if decisions_delta >= 0 { format!("+{decisions_delta}") } else { decisions_delta.to_string() },
             result.features.instruction_count,
             if kept_instructions >= 0 { format!("+{kept_instructions}") } else { kept_instructions.to_string() },
             profile_beats,
             profile_hot,
+            confidence,
             estimated_gain,
         )
     }).unwrap_or_else(|| format!(
@@ -231,6 +252,21 @@ mod tests {
         assert!(html.contains("性能摘要"));
         assert!(html.contains("启发式评分"));
         assert!(html.contains("Profile 1 / 热点 1"));
+    }
+
+    #[test]
+    fn json_report_exposes_profile_mix_score() {
+        let result = CompileResult {
+            products: vec![PathBuf::from("demo.opt.o")],
+            features: crate::FeatureSet::default(),
+            decisions: vec!["pgo: hot function main".into()],
+        };
+        let mut profile = crate::Profile::default();
+        profile.function_counts.insert("main".into(), 9);
+        profile.branch_counts.insert("entry:main".into(), (4, 5));
+        profile.loop_counts.insert("const-0".into(), 7);
+        let json = render_json("AUTOCOMP", &result, Some(&profile), None);
+        assert!(json.contains("\"mix_score\":1.00"));
     }
 
     #[test]
