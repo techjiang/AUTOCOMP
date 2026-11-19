@@ -45,5 +45,6 @@ cargo run -p autocomp-cli -- report demo.ac --pgo=demo.autoprof.txt --baseline -
 - `verify` 会把 IR 校验、Profile 合并、自动 PGO 和报告快照写成可追踪清单
 - `report --verify` 会把验证清单直接嵌入 HTML/JSON 报告
 - 验证清单区分 PASS / SKIP / FAIL，HTML 颜色标识，`--strict-verify` 可将 SKIP 视为失败
+- 多 Profile 合并会统计采样数、重叠项和函数/分支/循环分布，并写入 HTML/JSON 报告
 
 同一个世界，同一个互联网！

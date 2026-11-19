@@ -38,19 +38,38 @@ fn option_value(args: &[String], name: &str) -> Option<String> {
     args.iter().find_map(|a| a.strip_prefix(name).map(str::to_string))
 }
 
-fn load_profiles(args: &[String]) -> Result<Option<Profile>, String> {
-    let mut merged: Option<Profile> = None;
+fn load_profile_inputs(args: &[String]) -> Result<Vec<(PathBuf, Profile)>, String> {
+    let mut inputs = Vec::new();
     for arg in args {
         if let Some(path) = arg.strip_prefix("--pgo=") {
             let text = fs::read_to_string(path).map_err(|e| e.to_string())?;
-            let profile = Profile::from_text(&text)?;
-            merged = Some(match merged {
-                Some(existing) => existing.merge(&profile),
-                None => profile,
-            });
+            inputs.push((PathBuf::from(path), Profile::from_text(&text)?));
         }
     }
-    Ok(merged)
+    Ok(inputs)
+}
+
+fn merge_profile_inputs(inputs: &[ (PathBuf, Profile) ]) -> (Option<Profile>, Option<autocomp_core::ProfileMergeReport>) {
+    let mut merged = Profile::default();
+    let mut report = autocomp_core::ProfileMergeReport::default();
+    for (_, profile) in inputs {
+        let current = merged.merge_report(profile);
+        report.function_overlap += current.function_overlap;
+        report.branch_overlap += current.branch_overlap;
+        report.loop_overlap += current.loop_overlap;
+        report.function_samples += current.function_samples;
+        report.branch_samples += current.branch_samples;
+        report.loop_samples += current.loop_samples;
+    }
+    if inputs.is_empty() {
+        (None, None)
+    } else {
+        (Some(merged), Some(report))
+    }
+}
+
+fn load_profiles(args: &[String]) -> Result<Option<Profile>, String> {
+    Ok(merge_profile_inputs(&load_profile_inputs(args)?).0)
 }
 
 fn print_result(label: &str, result: &autocomp_core::CompileResult) {
@@ -189,7 +208,8 @@ fn report(args: &[String]) -> Result<(), String> {
     };
     let default_ext = if format == autocomp_core::report::ReportFormat::Json { "report.json" } else { "report.html" };
     let output = option_value(args, "--output=").map(PathBuf::from).unwrap_or_else(|| source.with_extension(default_ext));
-    let profile = load_profiles(args)?;
+    let profile_inputs = load_profile_inputs(args)?;
+    let (profile, merge_report) = merge_profile_inputs(&profile_inputs);
     let mut compiler = AutoCompiler::default();
     let options = CompileOptions {
         pgo_profile: option_value(args, "--pgo=").map(PathBuf::from),
@@ -227,7 +247,11 @@ fn report(args: &[String]) -> Result<(), String> {
     } else {
         None
     };
-    let text = autocomp_core::report::render(&format!("AUTOCOMP Report · {}", source.display()), &result, profile.as_ref(), baseline.as_ref(), verify.as_ref(), format);
+    if let Some(report) = &merge_report {
+        println!("profile merge: {} inputs / {} samples / {} overlaps",
+            profile_inputs.len(), report.sample_count(), report.overlap_count());
+    }
+    let text = autocomp_core::report::render(&format!("AUTOCOMP Report · {}", source.display()), &result, profile.as_ref(), baseline.as_ref(), verify.as_ref(), merge_report.as_ref(), format);
     fs::write(&output, text).map_err(|e| e.to_string())?;
     println!("report written to {}", output.display());
     Ok(())

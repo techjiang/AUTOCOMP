@@ -84,6 +84,26 @@ impl VerifyReport {
     }
 }
 
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ProfileMergeReport {
+    pub function_overlap: usize,
+    pub branch_overlap: usize,
+    pub loop_overlap: usize,
+    pub function_samples: u64,
+    pub branch_samples: u64,
+    pub loop_samples: u64,
+}
+
+impl ProfileMergeReport {
+    pub fn overlap_count(&self) -> usize {
+        self.function_overlap + self.branch_overlap + self.loop_overlap
+    }
+
+    pub fn sample_count(&self) -> u64 {
+        self.function_samples + self.branch_samples + self.loop_samples
+    }
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct Profile {
     pub function_counts: HashMap<String, u64>,
@@ -93,18 +113,43 @@ pub struct Profile {
 
 impl Profile {
     pub fn merge(mut self, other: &Profile) -> Profile {
+        let _ = self.merge_report(other);
+        self
+    }
+
+    pub fn merge_report(&mut self, other: &Profile) -> ProfileMergeReport {
+        let mut report = ProfileMergeReport::default();
         for (k, v) in &other.function_counts {
-            *self.function_counts.entry(k.clone()).or_insert(0) += v;
+            let entry = self.function_counts.entry(k.clone()).or_insert(0);
+            *entry += v;
+            report.function_overlap += 1;
+            report.function_samples += v;
         }
         for (k, v) in &other.branch_counts {
             let entry = self.branch_counts.entry(k.clone()).or_insert((0, 0));
+            let overlapped = entry.0 > 0 || entry.1 > 0;
             entry.0 += v.0;
             entry.1 += v.1;
+            if overlapped {
+                report.branch_overlap += 1;
+            }
+            report.branch_samples += v.0 + v.1;
         }
         for (k, v) in &other.loop_counts {
-            *self.loop_counts.entry(k.clone()).or_insert(0) += v;
+            let entry = self.loop_counts.entry(k.clone()).or_insert(0);
+            if *entry > 0 {
+                report.loop_overlap += 1;
+            }
+            *entry += v;
+            report.loop_samples += v;
         }
-        self
+        report
+    }
+
+    pub fn sample_total(&self) -> u64 {
+        self.function_counts.values().copied().sum::<u64>()
+            + self.branch_counts.values().map(|(a, b)| a + b).sum::<u64>()
+            + self.loop_counts.values().copied().sum::<u64>()
     }
 
     pub fn from_text(text: &str) -> Result<Self, String> {
@@ -277,9 +322,7 @@ impl AutoCompiler {
 
         let profile_text = profile.to_text();
         let merged = Profile::from_text(&profile_text)?.merge(profile);
-        let sample_total = profile.function_counts.values().copied().sum::<u64>()
-            + profile.branch_counts.values().map(|(a, b)| a + b).sum::<u64>()
-            + profile.loop_counts.values().copied().sum::<u64>();
+        let sample_total = profile.sample_total();
         checks.push(if sample_total > 0 && merged.to_text() == profile.to_text() {
             VerifyCheck::pass("profile-merge", format!("{sample_total} samples round-tripped"))
         } else {
@@ -426,6 +469,25 @@ mod tests {
         assert_eq!(merged.loop_counts["const-0"], 10);
         let restored = Profile::from_text(&merged.to_text()).unwrap();
         assert_eq!(restored.to_text(), merged.to_text());
+    }
+
+    #[test]
+    fn profile_merge_report_tracks_overlaps_and_samples() {
+        let mut left = Profile::default();
+        left.function_counts.insert("main".into(), 2);
+        left.branch_counts.insert("entry:main".into(), (1, 1));
+        left.loop_counts.insert("loop-0".into(), 3);
+        let mut right = Profile::default();
+        right.function_counts.insert("main".into(), 4);
+        right.function_counts.insert("worker".into(), 1);
+        right.branch_counts.insert("entry:main".into(), (2, 2));
+        right.loop_counts.insert("loop-0".into(), 5);
+        let report = left.merge_report(&right);
+        assert_eq!(report.function_overlap, 1);
+        assert_eq!(report.branch_overlap, 1);
+        assert_eq!(report.loop_overlap, 1);
+        assert_eq!(report.sample_count(), 15);
+        assert_eq!(left.sample_total(), 18);
     }
 
     #[test]
