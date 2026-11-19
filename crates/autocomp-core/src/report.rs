@@ -66,7 +66,7 @@ pub fn render_json(title: &str, result: &CompileResult, profile: Option<&Profile
         v.checks.len(),
         v.checks.iter().map(|c| {
             let status = if let Some(skip) = &c.skipped {
-                format!("SKIP:{}", skip)
+                format!("SKIP:{}", escape(skip))
             } else if c.passed {
                 "PASS".into()
             } else {

@@ -13,6 +13,10 @@ table{border-collapse:collapse;margin-top:.5rem}td,th{border:1px solid #d1d5db;p
 .metric{font-weight:600;color:#0f172a}
 .gain{color:#047857;background:#d1fae5;border-radius:999px;padding:.2rem .6rem;font-size:.9rem}
 .muted{color:#64748b;font-size:.9rem}
+.checks td:first-child{font-weight:700}
+.checks .pass{color:#047857;background:#d1fae5}
+.checks .fail{color:#b91c1c;background:#fee2e2}
+.checks .skip{color:#b45309;background:#fef3c7}
 </style>
 </head>
 <body>
@@ -35,14 +39,7 @@ table{border-collapse:collapse;margin-top:.5rem}td,th{border:1px solid #d1d5db;p
 <li>branch-layout: layout 1 hot branches: entry:main (true 67%)</li>
 <li>loop-tiling-hint: tile 1 hot loops: const-0 x6</li>
 </ol>
-<h2>验证清单</h2>
-<div class="panel"><span class="metric">4 / 4 passed</span></div>
-<table><thead><tr><th>状态</th><th>项目</th><th>说明</th></tr></thead><tbody>
-<tr><td>PASS</td><td>ir-verify</td><td>2 functions parsed with no errors</td></tr>
-<tr><td>PASS</td><td>profile-merge</td><td>18 samples round-tripped</td></tr>
-<tr><td>PASS</td><td>auto-pgo</td><td>11 decisions emitted</td></tr>
-<tr><td>PASS</td><td>report-snapshot</td><td>wrote demo.verify.txt</td></tr>
-</tbody></table>
+<h2>验证清单</h2><div class="panel"><span class="metric">3 pass / 1 skip / 0 fail</span></div><table class="checks"><thead><tr><th>状态</th><th>项目</th><th>说明</th></tr></thead><tbody><tr><td class="pass">PASS</td><td>ir-verify</td><td>2 functions parsed with no errors</td></tr><tr><td class="pass">PASS</td><td>profile-merge</td><td>10 samples round-tripped</td></tr><tr><td class="skip">SKIP · runtime-demo</td><td>auto-pgo</td><td>12 decisions emitted; host binary execution not verified</td></tr><tr><td class="pass">PASS</td><td>report-snapshot</td><td>wrote demo.verify.txt</td></tr></tbody></table>
 <h2>热点函数</h2><table><thead><tr><th>函数</th><th>采样数</th></tr></thead><tbody><tr><td>main</td><td>18</td></tr><tr><td>sum</td><td>7</td></tr></tbody></table>
 <h2>分支 Profile</h2><table><thead><tr><th>分支</th><th>false</th><th>true</th><th>true 比例</th></tr></thead><tbody><tr><td>entry:main</td><td>4</td><td>8</td><td>66.7%</td></tr></tbody></table>
 <h2>循环 Profile</h2><table><thead><tr><th>循环</th><th>采样数</th></tr></thead><tbody><tr><td>const-0</td><td>6</td></tr></tbody></table>
